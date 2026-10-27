@@ -1,0 +1,19 @@
+# Rust artifacts
+target/
+**/*.rs.bk
+Cargo.lock
+
+# Android & Gradle artifacts
+.gradle/
+build/
+*/build/
+local.properties
+.idea/
+*.iml
+*.apk
+*.aab
+
+# OS & Temp
+.DS_Store
+*.swp
+*~
