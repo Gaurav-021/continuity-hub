@@ -11,6 +11,7 @@ use tracing::{debug, error, info, warn};
 
 use crate::config::Identity;
 use crate::discovery::{DiscoveredDevice, DiscoveryManager};
+use crate::notifications::NotificationManager;
 use crate::platform::{ClipboardBackend, ClipboardItem};
 use crate::proto::{Channel, ClipboardPayload, Packet};
 use crate::transfer::FileTransferManager;
@@ -24,6 +25,7 @@ pub struct SyncEngine {
     tofu_store: TofuStore,
     clipboard_backend: Arc<dyn ClipboardBackend>,
     file_transfer_mgr: Arc<FileTransferManager>,
+    notification_mgr: Arc<NotificationManager>,
     active_peers: Arc<RwLock<HashMap<String, mpsc::Sender<Packet>>>>,
     connecting_peers: Arc<Mutex<HashSet<String>>>,
     sequence_number: AtomicU64,
@@ -39,6 +41,7 @@ impl SyncEngine {
         tofu_store: TofuStore,
         clipboard_backend: Arc<dyn ClipboardBackend>,
         file_transfer_mgr: Arc<FileTransferManager>,
+        notification_mgr: Arc<NotificationManager>,
     ) -> Self {
         let (clip_tx, clip_rx) = mpsc::channel::<ClipboardPayload>(64);
         let (peer_tx, peer_rx) = mpsc::channel::<PeerSession>(32);
@@ -48,6 +51,7 @@ impl SyncEngine {
             tofu_store,
             clipboard_backend,
             file_transfer_mgr,
+            notification_mgr,
             active_peers: Arc::new(RwLock::new(HashMap::new())),
             connecting_peers: Arc::new(Mutex::new(HashSet::new())),
             sequence_number: AtomicU64::new(0),
@@ -60,6 +64,10 @@ impl SyncEngine {
 
     pub fn file_transfer_manager(&self) -> Arc<FileTransferManager> {
         Arc::clone(&self.file_transfer_mgr)
+    }
+
+    pub fn notification_manager(&self) -> Arc<NotificationManager> {
+        Arc::clone(&self.notification_mgr)
     }
 
     pub async fn start(self: Arc<Self>) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
@@ -83,6 +91,7 @@ impl SyncEngine {
             my_info.clone(),
             self.tofu_store.clone(),
             Arc::clone(&self.file_transfer_mgr),
+            Arc::clone(&self.notification_mgr),
         )
         .await?;
 
@@ -171,7 +180,7 @@ impl SyncEngine {
         });
 
         info!(
-            "Continuity Daemon Phase 2 fully operational. Device ID: {}, Fingerprint: {}",
+            "Continuity Daemon Phase 3 fully operational. Device ID: {}, Fingerprint: {}",
             self.identity.config.device_id, self.identity.fingerprint
         );
 
@@ -202,6 +211,7 @@ impl SyncEngine {
         let peer_tx = self.peer_tx.clone();
         let tofu_store = self.tofu_store.clone();
         let file_transfer_mgr = Arc::clone(&self.file_transfer_mgr);
+        let notification_mgr = Arc::clone(&self.notification_mgr);
 
         tokio::spawn(async move {
             if let Err(e) = run_peer_connection(
@@ -212,6 +222,7 @@ impl SyncEngine {
                 peer_tx,
                 tofu_store,
                 file_transfer_mgr,
+                notification_mgr,
             )
             .await
             {
@@ -262,6 +273,7 @@ impl SyncEngine {
         let connecting_peers = Arc::clone(&self.connecting_peers);
         let tofu_store = self.tofu_store.clone();
         let file_transfer_mgr = Arc::clone(&self.file_transfer_mgr);
+        let notification_mgr = Arc::clone(&self.notification_mgr);
 
         tokio::spawn(async move {
             let mut connected = false;
@@ -290,6 +302,7 @@ impl SyncEngine {
                                     peer_tx.clone(),
                                     tofu_store.clone(),
                                     Arc::clone(&file_transfer_mgr),
+                                    Arc::clone(&notification_mgr),
                                 )
                                 .await
                                 {
@@ -350,6 +363,16 @@ impl SyncEngine {
         for (peer_id, tx) in peers.iter() {
             if let Err(e) = tx.send(packet.clone()).await {
                 warn!("Failed to queue clipboard packet to peer {}: {}", peer_id, e);
+            }
+        }
+    }
+
+    pub async fn broadcast_notification(&self, title: &str, body: &str, app_name: &str) {
+        let packet = self.notification_mgr.create_alert_packet(title, body, app_name);
+        let peers = self.active_peers.read().await;
+        for (peer_id, tx) in peers.iter() {
+            if let Err(e) = tx.send(packet.clone()).await {
+                warn!("Failed to send notification alert to peer {}: {}", peer_id, e);
             }
         }
     }

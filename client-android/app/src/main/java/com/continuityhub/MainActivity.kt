@@ -9,6 +9,7 @@ import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.provider.Settings
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -31,12 +32,14 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.OpenInNew
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Devices
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Error
-import androidx.compose.material.icons.automirrored.filled.OpenInNew
+import androidx.compose.material.icons.filled.Notifications
+import androidx.compose.material.icons.filled.NotificationsActive
 import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material.icons.filled.Upload
 import androidx.compose.material.icons.filled.UploadFile
@@ -60,14 +63,17 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
 import com.continuityhub.model.ClipboardLog
 import com.continuityhub.model.FileTransferItem
+import com.continuityhub.model.MirroredNotificationItem
 import com.continuityhub.service.ContinuityService
 import java.io.File
 import java.text.SimpleDateFormat
@@ -129,6 +135,17 @@ class MainActivity : ComponentActivity() {
                             } catch (e: Exception) {
                                 Toast.makeText(this, "Cannot open file: ${e.message}", Toast.LENGTH_SHORT).show()
                             }
+                        },
+                        onOpenNotificationSettings = {
+                            val intent = Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)
+                            startActivity(intent)
+                        },
+                        onSendTestAlert = {
+                            ContinuityService.sendTestAlertToDesktop(
+                                "Incoming WhatsApp Message",
+                                "Hey! Are you working on the Continuity engine?"
+                            )
+                            Toast.makeText(this, "Sent test notification alert to desktop", Toast.LENGTH_SHORT).show()
                         }
                     )
                 }
@@ -180,14 +197,22 @@ class MainActivity : ComponentActivity() {
 fun ContinuityApp(
     onCopyText: (String) -> Unit,
     onSendFileUri: (Uri) -> Unit,
-    onOpenFile: (String) -> Unit
+    onOpenFile: (String) -> Unit,
+    onOpenNotificationSettings: () -> Unit,
+    onSendTestAlert: () -> Unit
 ) {
+    val context = LocalContext.current
     val deviceConfig by ContinuityService.deviceConfigState.collectAsState()
     val fingerprint by ContinuityService.fingerprintState.collectAsState()
     val discoveredPeers by ContinuityService.discoveredPeersState.collectAsState()
     val connectedPeers by ContinuityService.connectedPeersState.collectAsState()
     val clipboardLogs by ContinuityService.clipboardLogsState.collectAsState()
     val fileTransfers by ContinuityService.fileTransfersState.collectAsState()
+    val notifications by ContinuityService.notificationsState.collectAsState()
+
+    val isNotificationListenerEnabled = NotificationManagerCompat
+        .getEnabledListenerPackages(context)
+        .contains(context.packageName)
 
     val filePickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.GetContent()
@@ -333,7 +358,58 @@ fun ContinuityApp(
                 }
             }
 
-            // 3. Actions: File Drop & Test Sync
+            // 3. Notification Mirroring Status Card
+            item {
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(
+                        containerColor = if (isNotificationListenerEnabled)
+                            MaterialTheme.colorScheme.surfaceVariant
+                        else
+                            Color(0xFFFFF3E0)
+                    ),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(
+                                imageVector = if (isNotificationListenerEnabled) Icons.Default.NotificationsActive else Icons.Default.Notifications,
+                                contentDescription = null,
+                                tint = if (isNotificationListenerEnabled) Color(0xFF4CAF50) else Color(0xFFFF9800)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = "Notification Mirroring",
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 16.sp
+                            )
+                        }
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Text(
+                            text = if (isNotificationListenerEnabled)
+                                "Notification mirroring is active. Phone notifications are mirrored to desktop with quick actions."
+                            else
+                                "Notification access permission required to mirror notifications to desktop.",
+                            fontSize = 13.sp,
+                            color = if (isNotificationListenerEnabled) Color.Unspecified else Color(0xFFE65100)
+                        )
+                        Spacer(modifier = Modifier.height(10.dp))
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            if (!isNotificationListenerEnabled) {
+                                Button(onClick = onOpenNotificationSettings) {
+                                    Text("Grant Notification Access")
+                                }
+                            } else {
+                                OutlinedButton(onClick = onSendTestAlert) {
+                                    Text("Send Test Alert to Desktop")
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // 4. Actions: File Drop & Test Sync
             item {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -362,7 +438,7 @@ fun ContinuityApp(
                 }
             }
 
-            // 4. File Transfers Section
+            // 5. File Transfers Section
             if (fileTransfers.isNotEmpty()) {
                 item {
                     Text(
@@ -378,7 +454,23 @@ fun ContinuityApp(
                 }
             }
 
-            // 5. Live Clipboard Log Header
+            // 6. Mirrored Notifications Section
+            if (notifications.isNotEmpty()) {
+                item {
+                    Text(
+                        text = "Mirrored Notifications",
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 16.sp,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                }
+
+                items(notifications) { notif ->
+                    NotificationCard(notif)
+                }
+            }
+
+            // 7. Live Clipboard Log Header
             item {
                 Text(
                     text = "Live Clipboard Synchronization Log",
@@ -388,7 +480,7 @@ fun ContinuityApp(
                 )
             }
 
-            // 6. Clipboard Sync Log Items
+            // 8. Clipboard Sync Log Items
             if (clipboardLogs.isEmpty()) {
                 item {
                     Text(
@@ -402,6 +494,38 @@ fun ContinuityApp(
                     ClipboardLogItem(log)
                 }
             }
+        }
+    }
+}
+
+@Composable
+fun NotificationCard(item: MirroredNotificationItem) {
+    val timeStr = SimpleDateFormat("HH:mm:ss", Locale.US).format(Date(item.timestamp))
+
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(8.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+    ) {
+        Column(modifier = Modifier.padding(12.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Text(
+                    text = "[${item.appName}] ${item.title}",
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 13.sp,
+                    color = MaterialTheme.colorScheme.primary
+                )
+                Text(
+                    text = timeStr,
+                    fontSize = 11.sp,
+                    color = Color.Gray
+                )
+            }
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(text = item.body, fontSize = 13.sp)
         }
     }
 }

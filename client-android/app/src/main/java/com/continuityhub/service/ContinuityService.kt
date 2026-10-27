@@ -21,11 +21,16 @@ import com.continuityhub.model.ClipboardLog
 import com.continuityhub.model.DeviceConfig
 import com.continuityhub.model.DiscoveredPeer
 import com.continuityhub.model.FileTransferItem
+import com.continuityhub.model.MirroredNotificationItem
+import com.continuityhub.notifications.ContinuityNotificationListener
 import com.continuityhub.proto.Channel
 import com.continuityhub.proto.ClipboardPayload
 import com.continuityhub.proto.FileTransferMessage
 import com.continuityhub.proto.HandshakeRequest
 import com.continuityhub.proto.HandshakeResponse
+import com.continuityhub.proto.NotificationDismiss
+import com.continuityhub.proto.NotificationMessage
+import com.continuityhub.proto.NotificationPayload
 import com.continuityhub.proto.Packet
 import com.continuityhub.transfer.AndroidFileTransferManager
 import com.continuityhub.transport.PacketFraming
@@ -36,8 +41,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import java.io.InputStream
@@ -80,6 +83,7 @@ class ContinuityService : Service() {
     companion object {
         private const val NOTIFICATION_ID = 1001
         private const val CHANNEL_ID = "continuity_service_channel"
+        private const val ALERT_CHANNEL_ID = "continuity_alerts_channel"
 
         var instance: ContinuityService? = null
             private set
@@ -90,6 +94,7 @@ class ContinuityService : Service() {
         val connectedPeersState = MutableStateFlow<List<String>>(emptyList())
         val clipboardLogsState = MutableStateFlow<List<ClipboardLog>>(emptyList())
         val fileTransfersState = MutableStateFlow<List<FileTransferItem>>(emptyList())
+        val notificationsState = MutableStateFlow<List<MirroredNotificationItem>>(emptyList())
 
         fun start(context: Context) {
             val intent = Intent(context, ContinuityService::class.java)
@@ -103,12 +108,24 @@ class ContinuityService : Service() {
         fun sendFile(uri: Uri) {
             instance?.sendFileInternal(uri)
         }
+
+        fun broadcastNotification(payload: NotificationPayload) {
+            instance?.broadcastNotificationInternal(payload)
+        }
+
+        fun broadcastNotificationDismiss(dismiss: NotificationDismiss) {
+            instance?.broadcastNotificationDismissInternal(dismiss)
+        }
+
+        fun sendTestAlertToDesktop(title: String, message: String) {
+            instance?.sendTestAlertInternal(title, message)
+        }
     }
 
     override fun onCreate() {
         super.onCreate()
         instance = this
-        Log.i(tag, "ContinuityService starting (Phase 2)...")
+        Log.i(tag, "ContinuityService starting (Phase 3)...")
 
         startInForeground()
 
@@ -157,8 +174,18 @@ class ContinuityService : Service() {
             ).apply {
                 description = "Background TLS sync and discovery"
             }
+
+            val alertChannel = NotificationChannel(
+                ALERT_CHANNEL_ID,
+                "Continuity Desktop Alerts",
+                NotificationManager.IMPORTANCE_HIGH
+            ).apply {
+                description = "Alerts mirrored from Desktop"
+            }
+
             val manager = getSystemService(NotificationManager::class.java)
             manager?.createNotificationChannel(channel)
+            manager?.createNotificationChannel(alertChannel)
         }
 
         val pendingIntent = PendingIntent.getActivity(
@@ -170,7 +197,7 @@ class ContinuityService : Service() {
 
         val notification: Notification = NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("Continuity Hub Active")
-            .setContentText("Listening for desktop pairing, clipboard sync & file drop...")
+            .setContentText("Syncing clipboard, file drop & notification mirroring...")
             .setSmallIcon(android.R.drawable.stat_notify_sync)
             .setContentIntent(pendingIntent)
             .setOngoing(true)
@@ -342,6 +369,31 @@ class ContinuityService : Service() {
                             session.sendPacket(reply)
                         }
                     }
+                    Channel.CHANNEL_NOTIFICATIONS -> {
+                        val msg = NotificationMessage.parseFrom(packet.payload)
+                        when (msg.msgCase) {
+                            NotificationMessage.MsgCase.POST -> {
+                                val post = msg.post
+                                showDesktopAlertNotification(post.title, post.body, post.appName)
+                                addMirroredNotification(
+                                    MirroredNotificationItem(
+                                        notificationId = post.notificationId,
+                                        packageName = post.packageName,
+                                        appName = post.appName,
+                                        title = post.title,
+                                        body = post.body,
+                                        timestamp = post.timestampMs,
+                                        hasQuickReply = false,
+                                        isIncomingFromDesktop = true
+                                    )
+                                )
+                            }
+                            NotificationMessage.MsgCase.ACTION -> {
+                                ContinuityNotificationListener.executeRemoteAction(msg.action)
+                            }
+                            else -> {}
+                        }
+                    }
                     Channel.CHANNEL_HEARTBEAT -> {
                         Log.d(tag, "Heartbeat from $peerDeviceName")
                     }
@@ -379,6 +431,73 @@ class ContinuityService : Service() {
         }
     }
 
+    private fun broadcastNotificationInternal(payload: NotificationPayload) {
+        addMirroredNotification(
+            MirroredNotificationItem(
+                notificationId = payload.notificationId,
+                packageName = payload.packageName,
+                appName = payload.appName,
+                title = payload.title,
+                body = payload.body,
+                timestamp = payload.timestampMs,
+                hasQuickReply = payload.hasQuickReply,
+                isIncomingFromDesktop = false
+            )
+        )
+
+        val msg = NotificationMessage.newBuilder().setPost(payload).build()
+        val packet = Packet.newBuilder()
+            .setSessionId(deviceConfigState.value?.deviceId ?: "")
+            .setSequenceNumber(sequenceNumber.incrementAndGet())
+            .setChannel(Channel.CHANNEL_NOTIFICATIONS)
+            .setPayload(msg.toByteString())
+            .build()
+
+        for ((_, session) in activeSessions) {
+            scope.launch {
+                try {
+                    session.sendPacket(packet)
+                    Log.d(tag, "Mirrored notification [${payload.appName}] to ${session.deviceName}")
+                } catch (e: Exception) {
+                    Log.w(tag, "Failed mirroring notification to ${session.deviceName}: ${e.message}")
+                }
+            }
+        }
+    }
+
+    private fun broadcastNotificationDismissInternal(dismiss: NotificationDismiss) {
+        val msg = NotificationMessage.newBuilder().setDismiss(dismiss).build()
+        val packet = Packet.newBuilder()
+            .setSessionId(deviceConfigState.value?.deviceId ?: "")
+            .setSequenceNumber(sequenceNumber.incrementAndGet())
+            .setChannel(Channel.CHANNEL_NOTIFICATIONS)
+            .setPayload(msg.toByteString())
+            .build()
+
+        for ((_, session) in activeSessions) {
+            scope.launch {
+                try {
+                    session.sendPacket(packet)
+                } catch (_: Exception) {}
+            }
+        }
+    }
+
+    private fun sendTestAlertInternal(title: String, message: String) {
+        val payload = NotificationPayload.newBuilder()
+            .setNotificationId(UUID.randomUUID().toString())
+            .setPackageName(packageName)
+            .setAppName("Continuity Android")
+            .setTitle(title)
+            .setBody(message)
+            .setTimestampMs(System.currentTimeMillis())
+            .setCategory("test_alert")
+            .setHasQuickReply(false)
+            .build()
+
+        broadcastNotificationInternal(payload)
+    }
+
     fun sendFileInternal(uri: Uri) {
         val session = activeSessions.values.firstOrNull()
         if (session == null) {
@@ -396,6 +515,25 @@ class ContinuityService : Service() {
                 Log.e(tag, "Failed sending file", result.exceptionOrNull())
             }
         }
+    }
+
+    private fun showDesktopAlertNotification(title: String, body: String, appName: String) {
+        val manager = getSystemService(NotificationManager::class.java)
+        val notification = NotificationCompat.Builder(this, ALERT_CHANNEL_ID)
+            .setContentTitle("[$appName] $title")
+            .setContentText(body)
+            .setSmallIcon(android.R.drawable.stat_notify_chat)
+            .setAutoCancel(true)
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .build()
+        manager?.notify(title.hashCode(), notification)
+    }
+
+    private fun addMirroredNotification(item: MirroredNotificationItem) {
+        val current = notificationsState.value.toMutableList()
+        current.add(0, item)
+        if (current.size > 50) current.removeAt(current.size - 1)
+        notificationsState.value = current
     }
 
     private fun updateConnectedPeers() {

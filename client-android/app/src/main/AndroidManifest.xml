@@ -46,6 +46,16 @@
             android:foregroundServiceType="connectedDevice"
             android:exported="false" />
 
+        <service
+            android:name=".notifications.ContinuityNotificationListener"
+            android:label="Continuity Notification Sync"
+            android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.service.notification.NotificationListenerService" />
+            </intent-filter>
+        </service>
+
         <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="${applicationId}.provider"

@@ -5,7 +5,11 @@ use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::mpsc;
 use tracing::{debug, error, info, warn};
 
-use crate::proto::{Channel, ClipboardPayload, FileTransferMessage, HandshakeRequest, HandshakeResponse, Packet};
+use crate::notifications::NotificationManager;
+use crate::proto::{
+    Channel, ClipboardPayload, FileTransferMessage, HandshakeRequest, HandshakeResponse,
+    NotificationMessage, Packet,
+};
 use crate::transfer::FileTransferManager;
 use crate::transport::framing::PacketFramed;
 use crate::transport::tofu::TofuStore;
@@ -30,6 +34,7 @@ pub async fn run_peer_connection<S>(
     register_peer_tx: mpsc::Sender<PeerSession>,
     tofu_store: TofuStore,
     file_transfer_mgr: Arc<FileTransferManager>,
+    notification_mgr: Arc<NotificationManager>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>>
 where
     S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
@@ -126,7 +131,7 @@ where
     let (out_tx, mut out_rx) = mpsc::channel::<Packet>(64);
     let session = PeerSession {
         info: peer_info.clone(),
-        tx: out_tx,
+        tx: out_tx.clone(),
     };
 
     if register_peer_tx.send(session).await.is_err() {
@@ -172,6 +177,23 @@ where
                                     }
                                     Err(e) => {
                                         warn!("Failed to decode FileTransferMessage from peer {}: {}", peer_info.device_name, e);
+                                    }
+                                }
+                            }
+                            Ok(Channel::Notifications) => {
+                                match NotificationMessage::decode(&in_packet.payload[..]) {
+                                    Ok(msg) => {
+                                        if let Some(reply) = notification_mgr
+                                            .handle_message(msg, &peer_info.device_name, out_tx.clone())
+                                            .await
+                                        {
+                                            if let Err(e) = framed.send_packet(&reply).await {
+                                                error!("Failed to send notification reply: {}", e);
+                                            }
+                                        }
+                                    }
+                                    Err(e) => {
+                                        warn!("Failed to decode NotificationMessage from peer {}: {}", peer_info.device_name, e);
                                     }
                                 }
                             }

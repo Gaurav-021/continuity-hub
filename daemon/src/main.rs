@@ -7,6 +7,7 @@ use tracing_subscriber::FmtSubscriber;
 pub mod config;
 pub mod discovery;
 pub mod engine;
+pub mod notifications;
 pub mod platform;
 pub mod proto;
 pub mod transfer;
@@ -14,6 +15,7 @@ pub mod transport;
 
 use config::{get_base_dir, Identity};
 use engine::SyncEngine;
+use notifications::NotificationManager;
 use platform::linux::WaylandClipboardBackend;
 use transfer::FileTransferManager;
 use transport::tofu::TofuStore;
@@ -40,6 +42,10 @@ struct Args {
     /// Send a file to the connected peer
     #[arg(long)]
     send_file: Option<PathBuf>,
+
+    /// Send a test notification alert to the connected peer
+    #[arg(long)]
+    notify_peer: Option<String>,
 }
 
 #[tokio::main]
@@ -56,7 +62,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let args = Args::parse();
     let base_dir = args.config_dir.unwrap_or_else(get_base_dir);
 
-    info!("Starting Continuity Hub Daemon (Phase 2)...");
+    info!("Starting Continuity Hub Daemon (Phase 3)...");
     info!("Base configuration directory: {:?}", base_dir);
 
     let mut identity = Identity::load_or_generate(&base_dir)?;
@@ -79,6 +85,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         None,
         identity.config.device_id.clone(),
     ));
+    let notification_mgr = Arc::new(NotificationManager::new(
+        identity.config.device_id.clone(),
+    ));
 
     info!("File downloads directory: {:?}", file_transfer_mgr.download_dir());
 
@@ -87,6 +96,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         tofu_store,
         clipboard_backend,
         file_transfer_mgr,
+        notification_mgr,
     ));
 
     engine.clone().start().await?;
@@ -114,6 +124,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                     error!("File transfer failed: {}", e);
                 }
             }
+        });
+    }
+
+    if let Some(msg) = args.notify_peer {
+        let engine_notify = Arc::clone(&engine);
+        tokio::spawn(async move {
+            info!("Waiting 1.5s for peer connection before dispatching notification...");
+            tokio::time::sleep(tokio::time::Duration::from_millis(1500)).await;
+            engine_notify.broadcast_notification("Desktop Alert", &msg, "Omarchy Linux").await;
+            info!("Desktop notification alert sent: '{}'", msg);
         });
     }
 
