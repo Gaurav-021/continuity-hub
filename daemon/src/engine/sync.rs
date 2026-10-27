@@ -1,5 +1,6 @@
 use std::collections::{HashMap, HashSet};
 use std::net::SocketAddr;
+use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use prost::Message;
@@ -12,6 +13,7 @@ use crate::config::Identity;
 use crate::discovery::{DiscoveredDevice, DiscoveryManager};
 use crate::platform::{ClipboardBackend, ClipboardItem};
 use crate::proto::{Channel, ClipboardPayload, Packet};
+use crate::transfer::FileTransferManager;
 use crate::transport::peer::{run_peer_connection, PeerInfo, PeerSession};
 use crate::transport::server::TlsServer;
 use crate::transport::tls::{create_client_config, create_server_config};
@@ -21,6 +23,7 @@ pub struct SyncEngine {
     identity: Arc<Identity>,
     tofu_store: TofuStore,
     clipboard_backend: Arc<dyn ClipboardBackend>,
+    file_transfer_mgr: Arc<FileTransferManager>,
     active_peers: Arc<RwLock<HashMap<String, mpsc::Sender<Packet>>>>,
     connecting_peers: Arc<Mutex<HashSet<String>>>,
     sequence_number: AtomicU64,
@@ -35,6 +38,7 @@ impl SyncEngine {
         identity: Arc<Identity>,
         tofu_store: TofuStore,
         clipboard_backend: Arc<dyn ClipboardBackend>,
+        file_transfer_mgr: Arc<FileTransferManager>,
     ) -> Self {
         let (clip_tx, clip_rx) = mpsc::channel::<ClipboardPayload>(64);
         let (peer_tx, peer_rx) = mpsc::channel::<PeerSession>(32);
@@ -43,6 +47,7 @@ impl SyncEngine {
             identity,
             tofu_store,
             clipboard_backend,
+            file_transfer_mgr,
             active_peers: Arc::new(RwLock::new(HashMap::new())),
             connecting_peers: Arc::new(Mutex::new(HashSet::new())),
             sequence_number: AtomicU64::new(0),
@@ -51,6 +56,10 @@ impl SyncEngine {
             clip_rx: Mutex::new(Some(clip_rx)),
             peer_rx: Mutex::new(Some(peer_rx)),
         }
+    }
+
+    pub fn file_transfer_manager(&self) -> Arc<FileTransferManager> {
+        Arc::clone(&self.file_transfer_mgr)
     }
 
     pub async fn start(self: Arc<Self>) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
@@ -68,7 +77,14 @@ impl SyncEngine {
 
         // 1. Start TLS TCP Server
         let bind_addr = SocketAddr::from(([0, 0, 0, 0], self.identity.config.port));
-        let server = TlsServer::bind(bind_addr, server_config, my_info.clone(), self.tofu_store.clone()).await?;
+        let server = TlsServer::bind(
+            bind_addr,
+            server_config,
+            my_info.clone(),
+            self.tofu_store.clone(),
+            Arc::clone(&self.file_transfer_mgr),
+        )
+        .await?;
 
         let server_clip_tx = self.clip_tx.clone();
         let server_peer_tx = self.peer_tx.clone();
@@ -155,7 +171,7 @@ impl SyncEngine {
         });
 
         info!(
-            "Continuity Daemon Phase 1 fully operational. Device ID: {}, Fingerprint: {}",
+            "Continuity Daemon Phase 2 fully operational. Device ID: {}, Fingerprint: {}",
             self.identity.config.device_id, self.identity.fingerprint
         );
 
@@ -185,6 +201,8 @@ impl SyncEngine {
         let clip_tx = self.clip_tx.clone();
         let peer_tx = self.peer_tx.clone();
         let tofu_store = self.tofu_store.clone();
+        let file_transfer_mgr = Arc::clone(&self.file_transfer_mgr);
+
         tokio::spawn(async move {
             if let Err(e) = run_peer_connection(
                 tls_stream,
@@ -193,6 +211,7 @@ impl SyncEngine {
                 clip_tx,
                 peer_tx,
                 tofu_store,
+                file_transfer_mgr,
             )
             .await
             {
@@ -223,7 +242,6 @@ impl SyncEngine {
         }
 
         // Deterministic connection tie-breaker:
-        // The device with lexicographically smaller device_id connects to the larger one.
         if my_info.device_id > peer_id {
             debug!(
                 "Deterministic tie-breaker: letting peer {} initiate connection to us (my ID is larger)",
@@ -243,6 +261,8 @@ impl SyncEngine {
 
         let connecting_peers = Arc::clone(&self.connecting_peers);
         let tofu_store = self.tofu_store.clone();
+        let file_transfer_mgr = Arc::clone(&self.file_transfer_mgr);
+
         tokio::spawn(async move {
             let mut connected = false;
             for addr in &device.addresses {
@@ -269,6 +289,7 @@ impl SyncEngine {
                                     clip_tx.clone(),
                                     peer_tx.clone(),
                                     tofu_store.clone(),
+                                    Arc::clone(&file_transfer_mgr),
                                 )
                                 .await
                                 {
@@ -331,5 +352,27 @@ impl SyncEngine {
                 warn!("Failed to queue clipboard packet to peer {}: {}", peer_id, e);
             }
         }
+    }
+
+    pub async fn send_file_to_peer(
+        &self,
+        file_path: &Path,
+        target_peer_id: Option<&str>,
+    ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+        let peers = self.active_peers.read().await;
+        let peer_tx = match target_peer_id {
+            Some(id) => peers.get(id).cloned().ok_or_else(|| {
+                format!("Peer ID '{}' is not currently connected", id)
+            })?,
+            None => {
+                if peers.is_empty() {
+                    return Err("No active peer connected to receive file".into());
+                }
+                peers.values().next().unwrap().clone()
+            }
+        };
+        drop(peers);
+
+        self.file_transfer_mgr.send_file(file_path, peer_tx).await
     }
 }

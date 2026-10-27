@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 use clap::Parser;
-use tracing::{info, Level};
+use tracing::{error, info, Level};
 use tracing_subscriber::FmtSubscriber;
 
 pub mod config;
@@ -9,11 +9,13 @@ pub mod discovery;
 pub mod engine;
 pub mod platform;
 pub mod proto;
+pub mod transfer;
 pub mod transport;
 
 use config::{get_base_dir, Identity};
 use engine::SyncEngine;
 use platform::linux::WaylandClipboardBackend;
+use transfer::FileTransferManager;
 use transport::tofu::TofuStore;
 
 #[derive(Parser, Debug)]
@@ -34,6 +36,10 @@ struct Args {
     /// Directly connect to a peer address (e.g. 127.0.0.1:52800)
     #[arg(long)]
     connect: Option<std::net::SocketAddr>,
+
+    /// Send a file to the connected peer
+    #[arg(long)]
+    send_file: Option<PathBuf>,
 }
 
 #[tokio::main]
@@ -50,7 +56,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let args = Args::parse();
     let base_dir = args.config_dir.unwrap_or_else(get_base_dir);
 
-    info!("Starting Continuity Hub Daemon...");
+    info!("Starting Continuity Hub Daemon (Phase 2)...");
     info!("Base configuration directory: {:?}", base_dir);
 
     let mut identity = Identity::load_or_generate(&base_dir)?;
@@ -69,11 +75,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
     let tofu_store = TofuStore::new(&base_dir)?;
     let clipboard_backend = Arc::new(WaylandClipboardBackend::new());
+    let file_transfer_mgr = Arc::new(FileTransferManager::new(
+        None,
+        identity.config.device_id.clone(),
+    ));
+
+    info!("File downloads directory: {:?}", file_transfer_mgr.download_dir());
 
     let engine = Arc::new(SyncEngine::new(
         Arc::new(identity),
         tofu_store,
         clipboard_backend,
+        file_transfer_mgr,
     ));
 
     engine.clone().start().await?;
@@ -83,7 +96,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         tokio::spawn(async move {
             tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
             if let Err(e) = engine_connect.connect_to_peer(peer_addr).await {
-                tracing::error!("Failed direct connection to {}: {}", peer_addr, e);
+                error!("Failed direct connection to {}: {}", peer_addr, e);
+            }
+        });
+    }
+
+    if let Some(file_to_send) = args.send_file {
+        let engine_send = Arc::clone(&engine);
+        tokio::spawn(async move {
+            info!("Waiting 1.5s for peer connection before dispatching file...");
+            tokio::time::sleep(tokio::time::Duration::from_millis(1500)).await;
+            match engine_send.send_file_to_peer(&file_to_send, None).await {
+                Ok(transfer_id) => {
+                    info!("File transfer {:?} completed successfully (ID: {})", file_to_send, transfer_id);
+                }
+                Err(e) => {
+                    error!("File transfer failed: {}", e);
+                }
             }
         });
     }

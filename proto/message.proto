@@ -9,7 +9,8 @@ enum Channel {
     CHANNEL_UNKNOWN = 0;
     CHANNEL_HANDSHAKE = 1;
     CHANNEL_CLIPBOARD = 2;
-    CHANNEL_HEARTBEAT = 3;
+    CHANNEL_FILE_TRANSFER = 3;
+    CHANNEL_HEARTBEAT = 4;
 }
 
 message Packet {
@@ -46,6 +47,50 @@ message ClipboardPayload {
     bytes data = 3;
     string content_hash = 4;
     string source_device_id = 5;
+}
+
+message FileTransferHeader {
+    string transfer_id = 1;
+    string file_name = 2;
+    uint64 file_size = 3;
+    string mime_type = 4;
+    uint64 total_chunks = 5;
+    uint32 chunk_size = 6;
+    string sha256_checksum = 7;
+    string source_device_id = 8;
+}
+
+message FileChunk {
+    string transfer_id = 1;
+    uint64 chunk_index = 2;
+    uint64 offset = 3;
+    bytes data = 4;
+    bool is_last_chunk = 5;
+    string chunk_hash = 6;
+}
+
+message FileTransferAck {
+    enum Status {
+        STATUS_UNKNOWN = 0;
+        STATUS_ACCEPTED = 1;
+        STATUS_REJECTED = 2;
+        STATUS_IN_PROGRESS = 3;
+        STATUS_COMPLETED = 4;
+        STATUS_CANCELLED = 5;
+        STATUS_CHECKSUM_FAILED = 6;
+    }
+    string transfer_id = 1;
+    Status status = 2;
+    uint64 last_received_chunk = 3;
+    string message = 4;
+}
+
+message FileTransferMessage {
+    oneof msg {
+        FileTransferHeader header = 1;
+        FileChunk chunk = 2;
+        FileTransferAck ack = 3;
+    }
 }
 
 message Heartbeat {

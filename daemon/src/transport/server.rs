@@ -6,6 +6,7 @@ use tokio_rustls::TlsAcceptor;
 use tracing::{error, info, warn};
 
 use crate::proto::ClipboardPayload;
+use crate::transfer::FileTransferManager;
 use crate::transport::peer::{run_peer_connection, PeerInfo, PeerSession};
 use crate::transport::tofu::TofuStore;
 
@@ -14,6 +15,7 @@ pub struct TlsServer {
     acceptor: TlsAcceptor,
     my_info: PeerInfo,
     tofu_store: TofuStore,
+    file_transfer_mgr: Arc<FileTransferManager>,
 }
 
 impl TlsServer {
@@ -22,6 +24,7 @@ impl TlsServer {
         server_config: Arc<rustls::ServerConfig>,
         my_info: PeerInfo,
         tofu_store: TofuStore,
+        file_transfer_mgr: Arc<FileTransferManager>,
     ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
         let listener = TcpListener::bind(addr).await?;
         let acceptor = TlsAcceptor::from(server_config);
@@ -31,6 +34,7 @@ impl TlsServer {
             acceptor,
             my_info,
             tofu_store,
+            file_transfer_mgr,
         })
     }
 
@@ -48,6 +52,7 @@ impl TlsServer {
                     let clip_tx = clipboard_tx.clone();
                     let reg_tx = register_peer_tx.clone();
                     let tofu_store = self.tofu_store.clone();
+                    let file_transfer_mgr = Arc::clone(&self.file_transfer_mgr);
 
                     tokio::spawn(async move {
                         info!("Incoming connection from {}", remote_addr);
@@ -61,6 +66,7 @@ impl TlsServer {
                                     clip_tx,
                                     reg_tx,
                                     tofu_store,
+                                    file_transfer_mgr,
                                 )
                                 .await
                                 {

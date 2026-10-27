@@ -8,6 +8,7 @@ import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
+import android.net.Uri
 import android.os.Build
 import android.os.IBinder
 import android.util.Log
@@ -19,11 +20,14 @@ import com.continuityhub.discovery.NsdDiscoveryManager
 import com.continuityhub.model.ClipboardLog
 import com.continuityhub.model.DeviceConfig
 import com.continuityhub.model.DiscoveredPeer
+import com.continuityhub.model.FileTransferItem
 import com.continuityhub.proto.Channel
 import com.continuityhub.proto.ClipboardPayload
+import com.continuityhub.proto.FileTransferMessage
 import com.continuityhub.proto.HandshakeRequest
 import com.continuityhub.proto.HandshakeResponse
 import com.continuityhub.proto.Packet
+import com.continuityhub.transfer.AndroidFileTransferManager
 import com.continuityhub.transport.PacketFraming
 import com.continuityhub.transport.TlsManager
 import com.continuityhub.transport.TofuManager
@@ -32,6 +36,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -52,6 +57,7 @@ class ContinuityService : Service() {
     private lateinit var tlsManager: TlsManager
     private lateinit var discoveryManager: NsdDiscoveryManager
     private lateinit var clipboardManager: AndroidClipboardManager
+    private lateinit var fileTransferManager: AndroidFileTransferManager
 
     private val activeSessions = ConcurrentHashMap<String, PeerSession>()
     private val connectingPeers = ConcurrentHashMap.newKeySet<String>()
@@ -75,11 +81,15 @@ class ContinuityService : Service() {
         private const val NOTIFICATION_ID = 1001
         private const val CHANNEL_ID = "continuity_service_channel"
 
+        var instance: ContinuityService? = null
+            private set
+
         val deviceConfigState = MutableStateFlow<DeviceConfig?>(null)
         val fingerprintState = MutableStateFlow("")
         val discoveredPeersState = MutableStateFlow<List<DiscoveredPeer>>(emptyList())
         val connectedPeersState = MutableStateFlow<List<String>>(emptyList())
         val clipboardLogsState = MutableStateFlow<List<ClipboardLog>>(emptyList())
+        val fileTransfersState = MutableStateFlow<List<FileTransferItem>>(emptyList())
 
         fun start(context: Context) {
             val intent = Intent(context, ContinuityService::class.java)
@@ -89,11 +99,16 @@ class ContinuityService : Service() {
                 context.startService(intent)
             }
         }
+
+        fun sendFile(uri: Uri) {
+            instance?.sendFileInternal(uri)
+        }
     }
 
     override fun onCreate() {
         super.onCreate()
-        Log.i(tag, "ContinuityService starting...")
+        instance = this
+        Log.i(tag, "ContinuityService starting (Phase 2)...")
 
         startInForeground()
 
@@ -118,6 +133,13 @@ class ContinuityService : Service() {
         clipboardManager = AndroidClipboardManager(this, deviceId) { payload ->
             broadcastClipboard(payload)
             addLog("Android", "Local Copy: ${payload.data.toStringUtf8().take(30)}", payload.contentHash)
+        }
+
+        fileTransferManager = AndroidFileTransferManager(this, deviceId, scope)
+        scope.launch {
+            fileTransferManager.transfersState.collect { transfers ->
+                fileTransfersState.value = transfers
+            }
         }
 
         discoveryManager = NsdDiscoveryManager(this, deviceId)
@@ -148,7 +170,7 @@ class ContinuityService : Service() {
 
         val notification: Notification = NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("Continuity Hub Active")
-            .setContentText("Listening for desktop pairing and sync...")
+            .setContentText("Listening for desktop pairing, clipboard sync & file drop...")
             .setSmallIcon(android.R.drawable.stat_notify_sync)
             .setContentIntent(pendingIntent)
             .setOngoing(true)
@@ -203,7 +225,6 @@ class ContinuityService : Service() {
     private fun evaluateOutboundConnection(peer: DiscoveredPeer, config: DeviceConfig) {
         if (activeSessions.containsKey(peer.deviceId)) return
 
-        // Tie-breaker: smaller deviceId initiates connection
         if (config.deviceId > peer.deviceId) {
             Log.d(tag, "Tie-breaker: letting peer ${peer.deviceName} initiate connection to us")
             return
@@ -242,7 +263,6 @@ class ContinuityService : Service() {
         val peerFingerprint: String
 
         if (isInitiator) {
-            // Send HandshakeRequest
             val req = HandshakeRequest.newBuilder()
                 .setDeviceName(config.deviceName)
                 .setDeviceId(config.deviceId)
@@ -259,7 +279,6 @@ class ContinuityService : Service() {
 
             PacketFraming.writePacket(output, packet)
 
-            // Wait for HandshakeResponse
             val respPacket = PacketFraming.readPacket(input)
             val resp = HandshakeResponse.parseFrom(respPacket.payload)
             if (resp.status != HandshakeResponse.Status.STATUS_ACCEPTED) {
@@ -271,14 +290,12 @@ class ContinuityService : Service() {
             peerDeviceName = resp.deviceName
             peerFingerprint = resp.certFingerprint
         } else {
-            // Wait for HandshakeRequest
             val reqPacket = PacketFraming.readPacket(input)
             val req = HandshakeRequest.parseFrom(reqPacket.payload)
             peerDeviceId = req.deviceId
             peerDeviceName = req.deviceName
             peerFingerprint = req.certFingerprint
 
-            // Reply with HandshakeResponse
             val resp = HandshakeResponse.newBuilder()
                 .setStatus(HandshakeResponse.Status.STATUS_ACCEPTED)
                 .setDeviceName(config.deviceName)
@@ -318,6 +335,13 @@ class ContinuityService : Service() {
                             payload.contentHash
                         )
                     }
+                    Channel.CHANNEL_FILE_TRANSFER -> {
+                        val msg = FileTransferMessage.parseFrom(packet.payload)
+                        val reply = fileTransferManager.handleIncomingMessage(msg, peerDeviceId, peerDeviceName)
+                        if (reply != null) {
+                            session.sendPacket(reply)
+                        }
+                    }
                     Channel.CHANNEL_HEARTBEAT -> {
                         Log.d(tag, "Heartbeat from $peerDeviceName")
                     }
@@ -355,21 +379,23 @@ class ContinuityService : Service() {
         }
     }
 
-    fun broadcastTestClip(text: String) {
-        val bytes = text.toByteArray(Charsets.UTF_8)
-        val hash = AndroidClipboardManager.hashBytes(bytes)
-        clipboardManager.markSeen(hash)
+    fun sendFileInternal(uri: Uri) {
+        val session = activeSessions.values.firstOrNull()
+        if (session == null) {
+            Log.w(tag, "No active peer session to send file to")
+            return
+        }
 
-        val payload = ClipboardPayload.newBuilder()
-            .setTimestampMs(System.currentTimeMillis())
-            .setMimeType("text/plain")
-            .setData(com.google.protobuf.ByteString.copyFrom(bytes))
-            .setContentHash(hash)
-            .setSourceDeviceId(deviceConfigState.value?.deviceId ?: "")
-            .build()
-
-        broadcastClipboard(payload)
-        addLog("Android", "Manual Test Sent: ${text.take(30)}", hash)
+        scope.launch {
+            val result = fileTransferManager.sendFile(uri, session.deviceName) { packet ->
+                session.sendPacket(packet)
+            }
+            if (result.isSuccess) {
+                Log.i(tag, "File sent successfully via Continuity")
+            } else {
+                Log.e(tag, "Failed sending file", result.exceptionOrNull())
+            }
+        }
     }
 
     private fun updateConnectedPeers() {
@@ -385,6 +411,7 @@ class ContinuityService : Service() {
 
     override fun onDestroy() {
         super.onDestroy()
+        instance = null
         Log.i(tag, "ContinuityService stopping...")
         discoveryManager.stopDiscovery()
         discoveryManager.unregisterService()

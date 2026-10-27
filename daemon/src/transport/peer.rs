@@ -1,10 +1,12 @@
 use std::io::ErrorKind;
+use std::sync::Arc;
 use prost::Message;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::mpsc;
 use tracing::{debug, error, info, warn};
 
-use crate::proto::{Channel, ClipboardPayload, HandshakeRequest, HandshakeResponse, Packet};
+use crate::proto::{Channel, ClipboardPayload, FileTransferMessage, HandshakeRequest, HandshakeResponse, Packet};
+use crate::transfer::FileTransferManager;
 use crate::transport::framing::PacketFramed;
 use crate::transport::tofu::TofuStore;
 
@@ -27,6 +29,7 @@ pub async fn run_peer_connection<S>(
     clipboard_tx: mpsc::Sender<ClipboardPayload>,
     register_peer_tx: mpsc::Sender<PeerSession>,
     tofu_store: TofuStore,
+    file_transfer_mgr: Arc<FileTransferManager>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>>
 where
     S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
@@ -120,7 +123,7 @@ where
         &peer_info.device_name,
     );
 
-    let (out_tx, mut out_rx) = mpsc::channel::<Packet>(32);
+    let (out_tx, mut out_rx) = mpsc::channel::<Packet>(64);
     let session = PeerSession {
         info: peer_info.clone(),
         tx: out_tx,
@@ -152,6 +155,23 @@ where
                                     }
                                     Err(e) => {
                                         warn!("Failed to decode ClipboardPayload from peer {}: {}", peer_info.device_name, e);
+                                    }
+                                }
+                            }
+                            Ok(Channel::FileTransfer) => {
+                                match FileTransferMessage::decode(&in_packet.payload[..]) {
+                                    Ok(msg) => {
+                                        if let Some(reply) = file_transfer_mgr
+                                            .handle_message(msg, &peer_info.device_id, &peer_info.device_name)
+                                            .await
+                                        {
+                                            if let Err(e) = framed.send_packet(&reply).await {
+                                                error!("Failed to send file transfer reply: {}", e);
+                                            }
+                                        }
+                                    }
+                                    Err(e) => {
+                                        warn!("Failed to decode FileTransferMessage from peer {}: {}", peer_info.device_name, e);
                                     }
                                 }
                             }

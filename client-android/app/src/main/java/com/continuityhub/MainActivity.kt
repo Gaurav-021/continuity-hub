@@ -4,11 +4,14 @@ import android.Manifest
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
+import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.widget.Toast
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
@@ -31,15 +34,21 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Devices
+import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.Error
+import androidx.compose.material.icons.automirrored.filled.OpenInNew
 import androidx.compose.material.icons.filled.Sync
+import androidx.compose.material.icons.filled.Upload
+import androidx.compose.material.icons.filled.UploadFile
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.Divider
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -56,8 +65,11 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
+import androidx.core.content.FileProvider
 import com.continuityhub.model.ClipboardLog
+import com.continuityhub.model.FileTransferItem
 import com.continuityhub.service.ContinuityService
+import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -87,6 +99,8 @@ class MainActivity : ComponentActivity() {
             ContinuityService.start(this)
         }
 
+        handleShareIntent(intent)
+
         setContent {
             MaterialTheme {
                 Surface(
@@ -98,8 +112,63 @@ class MainActivity : ComponentActivity() {
                             val cm = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
                             cm.setPrimaryClip(ClipData.newPlainText("Continuity", text))
                             Toast.makeText(this, "Copied to clipboard", Toast.LENGTH_SHORT).show()
+                        },
+                        onSendFileUri = { uri ->
+                            ContinuityService.sendFile(uri)
+                            Toast.makeText(this, "Sending file to desktop...", Toast.LENGTH_SHORT).show()
+                        },
+                        onOpenFile = { path ->
+                            try {
+                                val file = File(path)
+                                val uri = FileProvider.getUriForFile(this, "$packageName.provider", file)
+                                val viewIntent = Intent(Intent.ACTION_VIEW).apply {
+                                    setDataAndType(uri, "*/*")
+                                    flags = Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK
+                                }
+                                startActivity(viewIntent)
+                            } catch (e: Exception) {
+                                Toast.makeText(this, "Cannot open file: ${e.message}", Toast.LENGTH_SHORT).show()
+                            }
                         }
                     )
+                }
+            }
+        }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        handleShareIntent(intent)
+    }
+
+    private fun handleShareIntent(intent: Intent?) {
+        if (intent == null) return
+        when (intent.action) {
+            Intent.ACTION_SEND -> {
+                val uri = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                    intent.getParcelableExtra(Intent.EXTRA_STREAM, Uri::class.java)
+                } else {
+                    @Suppress("DEPRECATION")
+                    intent.getParcelableExtra(Intent.EXTRA_STREAM)
+                }
+                if (uri != null) {
+                    ContinuityService.sendFile(uri)
+                    Toast.makeText(this, "Sharing file to Continuity Desktop...", Toast.LENGTH_SHORT).show()
+                }
+            }
+            Intent.ACTION_SEND_MULTIPLE -> {
+                val uris = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                    intent.getParcelableArrayListExtra(Intent.EXTRA_STREAM, Uri::class.java)
+                } else {
+                    @Suppress("DEPRECATION")
+                    intent.getParcelableArrayListExtra(Intent.EXTRA_STREAM)
+                }
+                uris?.forEach { uri ->
+                    ContinuityService.sendFile(uri)
+                }
+                if (!uris.isNullOrEmpty()) {
+                    Toast.makeText(this, "Sharing ${uris.size} files to Desktop...", Toast.LENGTH_SHORT).show()
                 }
             }
         }
@@ -108,12 +177,23 @@ class MainActivity : ComponentActivity() {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun ContinuityApp(onCopyText: (String) -> Unit) {
+fun ContinuityApp(
+    onCopyText: (String) -> Unit,
+    onSendFileUri: (Uri) -> Unit,
+    onOpenFile: (String) -> Unit
+) {
     val deviceConfig by ContinuityService.deviceConfigState.collectAsState()
     val fingerprint by ContinuityService.fingerprintState.collectAsState()
     val discoveredPeers by ContinuityService.discoveredPeersState.collectAsState()
     val connectedPeers by ContinuityService.connectedPeersState.collectAsState()
     val clipboardLogs by ContinuityService.clipboardLogsState.collectAsState()
+    val fileTransfers by ContinuityService.fileTransfersState.collectAsState()
+
+    val filePickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.GetContent()
+    ) { uri: Uri? ->
+        uri?.let { onSendFileUri(it) }
+    }
 
     Scaffold(
         topBar = {
@@ -131,7 +211,10 @@ fun ContinuityApp(onCopyText: (String) -> Unit) {
                         Box(
                             modifier = Modifier
                                 .size(10.dp)
-                                .background(Color(0xFF4CAF50), shape = CircleShape)
+                                .background(
+                                    if (connectedPeers.isNotEmpty()) Color(0xFF4CAF50) else Color(0xFFFF9800),
+                                    shape = CircleShape
+                                )
                         )
                         Spacer(modifier = Modifier.width(6.dp))
                         Text(
@@ -250,22 +333,52 @@ fun ContinuityApp(onCopyText: (String) -> Unit) {
                 }
             }
 
-            // 3. Manual Test Action
+            // 3. Actions: File Drop & Test Sync
             item {
-                Button(
-                    onClick = {
-                        val testText = "Continuity Test: " + SimpleDateFormat("HH:mm:ss", Locale.US).format(Date())
-                        onCopyText(testText)
-                    },
-                    modifier = Modifier.fillMaxWidth()
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    Icon(Icons.Default.Sync, contentDescription = null)
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text("Copy Test Text to Trigger Sync")
+                    Button(
+                        onClick = { filePickerLauncher.launch("*/*") },
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Icon(Icons.Default.UploadFile, contentDescription = null)
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("Send File Drop")
+                    }
+
+                    OutlinedButton(
+                        onClick = {
+                            val testText = "Continuity Test: " + SimpleDateFormat("HH:mm:ss", Locale.US).format(Date())
+                            onCopyText(testText)
+                        },
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Icon(Icons.Default.Sync, contentDescription = null)
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("Test Clipboard")
+                    }
                 }
             }
 
-            // 4. Live Clipboard Log Header
+            // 4. File Transfers Section
+            if (fileTransfers.isNotEmpty()) {
+                item {
+                    Text(
+                        text = "File Transfers (Drop / Received)",
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 16.sp,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                }
+
+                items(fileTransfers) { transfer ->
+                    FileTransferCard(transfer, onOpenFile)
+                }
+            }
+
+            // 5. Live Clipboard Log Header
             item {
                 Text(
                     text = "Live Clipboard Synchronization Log",
@@ -275,7 +388,7 @@ fun ContinuityApp(onCopyText: (String) -> Unit) {
                 )
             }
 
-            // 5. Clipboard Sync Log Items
+            // 6. Clipboard Sync Log Items
             if (clipboardLogs.isEmpty()) {
                 item {
                     Text(
@@ -288,6 +401,91 @@ fun ContinuityApp(onCopyText: (String) -> Unit) {
                 items(clipboardLogs) { log ->
                     ClipboardLogItem(log)
                 }
+            }
+        }
+    }
+}
+
+@Composable
+fun FileTransferCard(item: FileTransferItem, onOpenFile: (String) -> Unit) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(10.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+    ) {
+        Column(modifier = Modifier.padding(14.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Icon(
+                    imageVector = if (item.isIncoming) Icons.Default.Download else Icons.Default.Upload,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(24.dp)
+                )
+                Spacer(modifier = Modifier.width(10.dp))
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = item.fileName,
+                        fontWeight = FontWeight.SemiBold,
+                        fontSize = 14.sp
+                    )
+                    Text(
+                        text = if (item.isIncoming) "From: ${item.peerName}" else "To: ${item.peerName}",
+                        fontSize = 12.sp,
+                        color = Color.Gray
+                    )
+                }
+
+                if (item.isCompleted) {
+                    if (item.localPath != null) {
+                        IconButton(onClick = { onOpenFile(item.localPath) }) {
+                            Icon(Icons.AutoMirrored.Filled.OpenInNew, contentDescription = "Open File", tint = MaterialTheme.colorScheme.primary)
+                        }
+                    } else {
+                        Icon(Icons.Default.CheckCircle, contentDescription = null, tint = Color(0xFF4CAF50))
+                    }
+                } else if (item.isFailed) {
+                    Icon(Icons.Default.Error, contentDescription = null, tint = Color.Red)
+                }
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            if (!item.isCompleted && !item.isFailed) {
+                LinearProgressIndicator(
+                    progress = { item.progressPercentage },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(6.dp),
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+            }
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Text(
+                    text = item.formattedProgress,
+                    fontSize = 11.sp,
+                    color = Color.Gray
+                )
+                Text(
+                    text = when {
+                        item.isCompleted -> "Completed"
+                        item.isFailed -> item.errorMessage ?: "Failed"
+                        else -> "${(item.progressPercentage * 100).toInt()}%"
+                    },
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Medium,
+                    color = when {
+                        item.isCompleted -> Color(0xFF4CAF50)
+                        item.isFailed -> Color.Red
+                        else -> MaterialTheme.colorScheme.primary
+                    }
+                )
             }
         }
     }
