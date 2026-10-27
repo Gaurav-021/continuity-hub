@@ -28,6 +28,7 @@ import com.continuityhub.proto.ClipboardPayload
 import com.continuityhub.proto.FileTransferMessage
 import com.continuityhub.proto.HandshakeRequest
 import com.continuityhub.proto.HandshakeResponse
+import com.continuityhub.proto.InputMessage
 import com.continuityhub.proto.NotificationDismiss
 import com.continuityhub.proto.NotificationMessage
 import com.continuityhub.proto.NotificationPayload
@@ -119,6 +120,10 @@ class ContinuityService : Service() {
 
         fun sendTestAlertToDesktop(title: String, message: String) {
             instance?.sendTestAlertInternal(title, message)
+        }
+
+        fun sendInput(inputMsg: InputMessage) {
+            instance?.sendInputInternal(inputMsg)
         }
     }
 
@@ -397,6 +402,9 @@ class ContinuityService : Service() {
                     Channel.CHANNEL_HEARTBEAT -> {
                         Log.d(tag, "Heartbeat from $peerDeviceName")
                     }
+                    Channel.CHANNEL_INPUT -> {
+                        Log.d(tag, "Received input from $peerDeviceName")
+                    }
                     else -> {
                         Log.d(tag, "Unhandled channel ${packet.channel} from $peerDeviceName")
                     }
@@ -527,6 +535,25 @@ class ContinuityService : Service() {
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .build()
         manager?.notify(title.hashCode(), notification)
+    }
+
+    private fun sendInputInternal(inputMsg: InputMessage) {
+        val packet = Packet.newBuilder()
+            .setSessionId(deviceConfigState.value?.deviceId ?: "")
+            .setSequenceNumber(sequenceNumber.incrementAndGet())
+            .setChannel(Channel.CHANNEL_INPUT)
+            .setPayload(inputMsg.toByteString())
+            .build()
+
+        for ((_, session) in activeSessions) {
+            scope.launch {
+                try {
+                    session.sendPacket(packet)
+                } catch (e: Exception) {
+                    Log.w(tag, "Failed sending input to ${session.deviceName}: ${e.message}")
+                }
+            }
+        }
     }
 
     private fun addMirroredNotification(item: MirroredNotificationItem) {

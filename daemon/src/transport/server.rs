@@ -5,6 +5,7 @@ use tokio::sync::mpsc;
 use tokio_rustls::TlsAcceptor;
 use tracing::{error, info, warn};
 
+use crate::input::InputManager;
 use crate::notifications::NotificationManager;
 use crate::proto::ClipboardPayload;
 use crate::transfer::FileTransferManager;
@@ -18,6 +19,7 @@ pub struct TlsServer {
     tofu_store: TofuStore,
     file_transfer_mgr: Arc<FileTransferManager>,
     notification_mgr: Arc<NotificationManager>,
+    input_mgr: Arc<InputManager>,
 }
 
 impl TlsServer {
@@ -28,6 +30,7 @@ impl TlsServer {
         tofu_store: TofuStore,
         file_transfer_mgr: Arc<FileTransferManager>,
         notification_mgr: Arc<NotificationManager>,
+        input_mgr: Arc<InputManager>,
     ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
         let listener = TcpListener::bind(addr).await?;
         let acceptor = TlsAcceptor::from(server_config);
@@ -39,6 +42,7 @@ impl TlsServer {
             tofu_store,
             file_transfer_mgr,
             notification_mgr,
+            input_mgr,
         })
     }
 
@@ -58,6 +62,7 @@ impl TlsServer {
                     let tofu_store = self.tofu_store.clone();
                     let file_transfer_mgr = Arc::clone(&self.file_transfer_mgr);
                     let notification_mgr = Arc::clone(&self.notification_mgr);
+                    let input_mgr = Arc::clone(&self.input_mgr);
 
                     tokio::spawn(async move {
                         info!("Incoming connection from {}", remote_addr);
@@ -73,6 +78,7 @@ impl TlsServer {
                                     tofu_store,
                                     file_transfer_mgr,
                                     notification_mgr,
+                                    input_mgr,
                                 )
                                 .await
                                 {

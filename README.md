@@ -23,6 +23,7 @@ continuity-hub/
 │       ├── platform/                      # Abstracted platform traits & Wayland Hyprland backend
 │       ├── transfer/                      # High-throughput P2P file transfer & SHA-256 streaming
 │       ├── notifications/                 # D-Bus desktop notification mirroring & action handlers
+│       ├── input/                         # Wayland virtual pointer (zwlr) & keyboard (wtype) input
 │       └── engine/                        # Central synchronization orchestrator & deduplication
 └── client-android/                        # Mobile Client (Android Kotlin + Jetpack Compose)
     ├── build.gradle.kts                   # Root Gradle build configuration
@@ -33,7 +34,8 @@ continuity-hub/
             ├── AndroidManifest.xml        # Foreground & Notification Listener service declarations
             ├── proto -> ../../../../proto # Direct symlink to root proto directory
             └── java/com/continuityhub/
-                ├── MainActivity.kt        # Jetpack Compose UI (Cards for Identity, Peers, File Drop, Notifs)
+                ├── MainActivity.kt        # Jetpack Compose UI (Bottom Navigation: Hub + Trackpad)
+                ├── ui/                    # Remote Trackpad Screen, Gestures & Shortcut Chips
                 ├── service/               # Foreground Service (ContinuityService)
                 ├── crypto/                # RSA keypair & X.509 self-signed cert generation
                 ├── transport/             # mTLS SSLSocket/SSLServerSocket & TOFU TrustManager
@@ -67,6 +69,18 @@ continuity-hub/
 - **Remote Execution:** Action clicks on Linux desktop trigger `NotificationListenerService.cancelNotification` or `RemoteInput` quick reply back to the Android phone.
 - **Desktop-to-Phone Alerts:** Send alerts from Linux terminal to phone with `continuity-daemon --notify-peer "message"`.
 - **Mirror Latency:** 846 µs from dispatch to desktop notification display.
+
+### 🖱️ Phase 4: Remote Trackpad & Virtual Keyboard Sharing
+- **Native Wayland Virtual Pointer:** Directly binds to wlroots `zwlr_virtual_pointer_manager_v1` v2 on Hyprland. Emulates relative pointer movements, multi-button clicks (Left, Middle, Right), and vertical/horizontal axis scrolling without requiring root or `/dev/uinput`.
+- **Virtual Keyboard & Key Combinations:** Bridges `zwp_virtual_keyboard_v1` and `wtype` for typing text, executing special keys (Return, Backspace, Tab, Escape, Arrows), and system shortcuts (`Ctrl+C`, `Ctrl+V`, `Ctrl+Z`, `Alt+Tab`, `Super/Win`).
+- **Interactive Jetpack Compose Trackpad:**
+  - 1-Finger Drag: Smooth relative cursor movement with configurable sensitivity (0.5x–3.5x).
+  - 1-Finger Tap: Instant Left Click with haptic confirmation.
+  - 2-Finger Drag: Smooth vertical and horizontal document/window scrolling.
+  - 2-Finger Tap: Right Click context menu trigger.
+  - Dedicated Left, Middle, and Right mouse buttons with press-and-hold drag support.
+- **Live Text & Voice Typing:** Type or dictate text on Android to stream text into the focused Hyprland application.
+- **Adaptive Tabbed Navigation:** Seamless bottom bar toggling between the Hub dashboard and full-screen remote trackpad.
 
 ---
 

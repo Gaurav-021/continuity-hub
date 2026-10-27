@@ -275,7 +275,7 @@ impl FileTransferManager {
                                 message: "File received and verified successfully".to_string(),
                             };
                             incoming_map.remove(&chunk.transfer_id);
-                            return Some(self.wrap_packet(FileTransferMessage { msg: Some(Msg::Ack(ack)) }));
+                            Some(self.wrap_packet(FileTransferMessage { msg: Some(Msg::Ack(ack)) }))
                         } else {
                             error!(
                                 "Checksum verification FAILED for '{}'! Expected: {}, Got: {}",
@@ -291,11 +291,11 @@ impl FileTransferManager {
                                 message: "SHA-256 checksum mismatch".to_string(),
                             };
                             incoming_map.remove(&chunk.transfer_id);
-                            return Some(self.wrap_packet(FileTransferMessage { msg: Some(Msg::Ack(ack)) }));
+                            Some(self.wrap_packet(FileTransferMessage { msg: Some(Msg::Ack(ack)) }))
                         }
                     } else {
                         // Periodic ack or silently continue streaming
-                        return None;
+                        None
                     }
                 } else {
                     warn!("Received chunk for unknown transfer_id: {}", chunk.transfer_id);
@@ -356,7 +356,7 @@ impl FileTransferManager {
         let total_chunks = if file_size == 0 {
             1
         } else {
-            (file_size + DEFAULT_CHUNK_SIZE as u64 - 1) / DEFAULT_CHUNK_SIZE as u64
+            file_size.div_ceil(DEFAULT_CHUNK_SIZE as u64)
         };
 
         let transfer_id = Uuid::new_v4().to_string();

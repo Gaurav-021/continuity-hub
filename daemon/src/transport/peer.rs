@@ -5,10 +5,11 @@ use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::mpsc;
 use tracing::{debug, error, info, warn};
 
+use crate::input::InputManager;
 use crate::notifications::NotificationManager;
 use crate::proto::{
     Channel, ClipboardPayload, FileTransferMessage, HandshakeRequest, HandshakeResponse,
-    NotificationMessage, Packet,
+    InputMessage, NotificationMessage, Packet,
 };
 use crate::transfer::FileTransferManager;
 use crate::transport::framing::PacketFramed;
@@ -26,6 +27,7 @@ pub struct PeerSession {
     pub tx: mpsc::Sender<Packet>,
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn run_peer_connection<S>(
     stream: S,
     my_info: PeerInfo,
@@ -35,6 +37,7 @@ pub async fn run_peer_connection<S>(
     tofu_store: TofuStore,
     file_transfer_mgr: Arc<FileTransferManager>,
     notification_mgr: Arc<NotificationManager>,
+    input_mgr: Arc<InputManager>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>>
 where
     S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
@@ -194,6 +197,16 @@ where
                                     }
                                     Err(e) => {
                                         warn!("Failed to decode NotificationMessage from peer {}: {}", peer_info.device_name, e);
+                                    }
+                                }
+                            }
+                            Ok(Channel::Input) => {
+                                match InputMessage::decode(&in_packet.payload[..]) {
+                                    Ok(msg) => {
+                                        input_mgr.handle_message(msg).await;
+                                    }
+                                    Err(e) => {
+                                        warn!("Failed to decode InputMessage from peer {}: {}", peer_info.device_name, e);
                                     }
                                 }
                             }

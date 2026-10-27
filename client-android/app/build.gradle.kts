@@ -86,4 +86,6 @@ dependencies {
     // Security & BouncyCastle for X.509 self-signed cert generation
     implementation("org.bouncycastle:bcprov-jdk18on:1.79")
     implementation("org.bouncycastle:bcpkix-jdk18on:1.79")
+
+    testImplementation("junit:junit:4.13.2")
 }

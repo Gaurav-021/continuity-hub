@@ -41,6 +41,7 @@ import androidx.compose.material.icons.filled.Error
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.NotificationsActive
 import androidx.compose.material.icons.filled.Sync
+import androidx.compose.material.icons.filled.TouchApp
 import androidx.compose.material.icons.filled.Upload
 import androidx.compose.material.icons.filled.UploadFile
 import androidx.compose.material3.Button
@@ -51,6 +52,8 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.NavigationBar
+import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
@@ -60,6 +63,9 @@ import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -75,6 +81,7 @@ import com.continuityhub.model.ClipboardLog
 import com.continuityhub.model.FileTransferItem
 import com.continuityhub.model.MirroredNotificationItem
 import com.continuityhub.service.ContinuityService
+import com.continuityhub.ui.TrackpadScreen
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -214,6 +221,8 @@ fun ContinuityApp(
         .getEnabledListenerPackages(context)
         .contains(context.packageName)
 
+    var selectedTab by remember { mutableIntStateOf(0) }
+
     val filePickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.GetContent()
     ) { uri: Uri? ->
@@ -223,7 +232,7 @@ fun ContinuityApp(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Continuity Hub", fontWeight = FontWeight.Bold) },
+                title = { Text(if (selectedTab == 1) "Remote Trackpad" else "Continuity Hub", fontWeight = FontWeight.Bold) },
                 colors = TopAppBarDefaults.topAppBarColors(
                     containerColor = MaterialTheme.colorScheme.primaryContainer,
                     titleContentColor = MaterialTheme.colorScheme.onPrimaryContainer
@@ -250,15 +259,37 @@ fun ContinuityApp(
                     }
                 }
             )
+        },
+        bottomBar = {
+            NavigationBar {
+                NavigationBarItem(
+                    icon = { Icon(Icons.Default.Devices, contentDescription = "Hub") },
+                    label = { Text("Hub") },
+                    selected = selectedTab == 0,
+                    onClick = { selectedTab = 0 }
+                )
+                NavigationBarItem(
+                    icon = { Icon(Icons.Default.TouchApp, contentDescription = "Trackpad") },
+                    label = { Text("Trackpad") },
+                    selected = selectedTab == 1,
+                    onClick = { selectedTab = 1 }
+                )
+            }
         }
     ) { padding ->
-        LazyColumn(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(padding)
-                .padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp)
-        ) {
+        if (selectedTab == 1) {
+            TrackpadScreen(
+                isConnected = connectedPeers.isNotEmpty(),
+                modifier = Modifier.padding(padding)
+            )
+        } else {
+            LazyColumn(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(padding)
+                    .padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(16.dp)
+            ) {
             // 1. Device Identity Card
             item {
                 Card(
@@ -494,6 +525,7 @@ fun ContinuityApp(
                     ClipboardLogItem(log)
                 }
             }
+        }
         }
     }
 }

@@ -85,7 +85,7 @@ impl TofuStore {
 
         // 2. Check if device_id is already pinned under a DIFFERENT fingerprint
         if let Some(id) = suggested_device_id {
-            for (_, dev) in map.iter() {
+            for dev in map.values() {
                 if dev.device_id == id && dev.cert_fingerprint != fingerprint {
                     warn!(
                         "TOFU WARNING: Device ID '{}' presented fingerprint '{}', but was previously pinned as '{}'! Possible MITM attack!",

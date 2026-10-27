@@ -11,6 +11,7 @@ use tracing::{debug, error, info, warn};
 
 use crate::config::Identity;
 use crate::discovery::{DiscoveredDevice, DiscoveryManager};
+use crate::input::InputManager;
 use crate::notifications::NotificationManager;
 use crate::platform::{ClipboardBackend, ClipboardItem};
 use crate::proto::{Channel, ClipboardPayload, Packet};
@@ -26,6 +27,7 @@ pub struct SyncEngine {
     clipboard_backend: Arc<dyn ClipboardBackend>,
     file_transfer_mgr: Arc<FileTransferManager>,
     notification_mgr: Arc<NotificationManager>,
+    input_mgr: Arc<InputManager>,
     active_peers: Arc<RwLock<HashMap<String, mpsc::Sender<Packet>>>>,
     connecting_peers: Arc<Mutex<HashSet<String>>>,
     sequence_number: AtomicU64,
@@ -42,6 +44,7 @@ impl SyncEngine {
         clipboard_backend: Arc<dyn ClipboardBackend>,
         file_transfer_mgr: Arc<FileTransferManager>,
         notification_mgr: Arc<NotificationManager>,
+        input_mgr: Arc<InputManager>,
     ) -> Self {
         let (clip_tx, clip_rx) = mpsc::channel::<ClipboardPayload>(64);
         let (peer_tx, peer_rx) = mpsc::channel::<PeerSession>(32);
@@ -52,6 +55,7 @@ impl SyncEngine {
             clipboard_backend,
             file_transfer_mgr,
             notification_mgr,
+            input_mgr,
             active_peers: Arc::new(RwLock::new(HashMap::new())),
             connecting_peers: Arc::new(Mutex::new(HashSet::new())),
             sequence_number: AtomicU64::new(0),
@@ -92,6 +96,7 @@ impl SyncEngine {
             self.tofu_store.clone(),
             Arc::clone(&self.file_transfer_mgr),
             Arc::clone(&self.notification_mgr),
+            Arc::clone(&self.input_mgr),
         )
         .await?;
 
@@ -212,6 +217,7 @@ impl SyncEngine {
         let tofu_store = self.tofu_store.clone();
         let file_transfer_mgr = Arc::clone(&self.file_transfer_mgr);
         let notification_mgr = Arc::clone(&self.notification_mgr);
+        let input_mgr = Arc::clone(&self.input_mgr);
 
         tokio::spawn(async move {
             if let Err(e) = run_peer_connection(
@@ -223,6 +229,7 @@ impl SyncEngine {
                 tofu_store,
                 file_transfer_mgr,
                 notification_mgr,
+                input_mgr,
             )
             .await
             {
@@ -274,6 +281,7 @@ impl SyncEngine {
         let tofu_store = self.tofu_store.clone();
         let file_transfer_mgr = Arc::clone(&self.file_transfer_mgr);
         let notification_mgr = Arc::clone(&self.notification_mgr);
+        let input_mgr = Arc::clone(&self.input_mgr);
 
         tokio::spawn(async move {
             let mut connected = false;
@@ -303,6 +311,7 @@ impl SyncEngine {
                                     tofu_store.clone(),
                                     Arc::clone(&file_transfer_mgr),
                                     Arc::clone(&notification_mgr),
+                                    Arc::clone(&input_mgr),
                                 )
                                 .await
                                 {

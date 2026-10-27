@@ -12,6 +12,7 @@ enum Channel {
     CHANNEL_FILE_TRANSFER = 3;
     CHANNEL_NOTIFICATIONS = 4;
     CHANNEL_HEARTBEAT = 5;
+    CHANNEL_INPUT = 6;
 }
 
 message Packet {
@@ -146,3 +147,54 @@ message NotificationMessage {
 message Heartbeat {
     uint64 timestamp_ms = 1;
 }
+
+// Remote Input Messages (Trackpad & Keyboard)
+message MouseMoveEvent {
+    float dx = 1;
+    float dy = 2;
+}
+
+message MouseButtonEvent {
+    enum Button {
+        BUTTON_UNKNOWN = 0;
+        BUTTON_LEFT = 1;
+        BUTTON_RIGHT = 2;
+        BUTTON_MIDDLE = 3;
+    }
+    enum State {
+        STATE_UNKNOWN = 0;
+        STATE_PRESS = 1;
+        STATE_RELEASE = 2;
+        STATE_CLICK = 3;
+    }
+    Button button = 1;
+    State state = 2;
+}
+
+message MouseScrollEvent {
+    float dx = 1;
+    float dy = 2;
+}
+
+message KeyEvent {
+    enum KeyState {
+        KEY_STATE_UNKNOWN = 0;
+        KEY_PRESS = 1;
+        KEY_RELEASE = 2;
+        KEY_CLICK = 3;
+    }
+    string key_name = 1;
+    string text = 2;
+    KeyState state = 3;
+    repeated string modifiers = 4;
+}
+
+message InputMessage {
+    oneof event {
+        MouseMoveEvent mouse_move = 1;
+        MouseButtonEvent mouse_button = 2;
+        MouseScrollEvent mouse_scroll = 3;
+        KeyEvent key_event = 4;
+    }
+}
+

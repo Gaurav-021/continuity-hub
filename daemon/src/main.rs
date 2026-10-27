@@ -7,6 +7,7 @@ use tracing_subscriber::FmtSubscriber;
 pub mod config;
 pub mod discovery;
 pub mod engine;
+pub mod input;
 pub mod notifications;
 pub mod platform;
 pub mod proto;
@@ -15,6 +16,7 @@ pub mod transport;
 
 use config::{get_base_dir, Identity};
 use engine::SyncEngine;
+use input::InputManager;
 use notifications::NotificationManager;
 use platform::linux::WaylandClipboardBackend;
 use transfer::FileTransferManager;
@@ -88,6 +90,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let notification_mgr = Arc::new(NotificationManager::new(
         identity.config.device_id.clone(),
     ));
+    let input_mgr = Arc::new(InputManager::new());
 
     info!("File downloads directory: {:?}", file_transfer_mgr.download_dir());
 
@@ -97,6 +100,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         clipboard_backend,
         file_transfer_mgr,
         notification_mgr,
+        input_mgr,
     ));
 
     engine.clone().start().await?;

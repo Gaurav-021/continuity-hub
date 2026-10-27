@@ -117,7 +117,7 @@ impl NotificationManager {
                             debug!("notify-rust show_async error: {}, falling back to notify-send", e);
                             let _ = std::process::Command::new("notify-send")
                                 .arg("-a")
-                                .arg(&format!("Continuity: {}", payload.app_name))
+                                .arg(format!("Continuity: {}", payload.app_name))
                                 .arg(&summary)
                                 .arg(&body)
                                 .spawn();
