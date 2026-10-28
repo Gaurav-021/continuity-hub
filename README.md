@@ -24,6 +24,7 @@ continuity-hub/
 │       ├── transfer/                      # High-throughput P2P file transfer & SHA-256 streaming
 │       ├── notifications/                 # D-Bus desktop notification mirroring & action handlers
 │       ├── input/                         # Wayland virtual pointer (zwlr) & keyboard (wtype) input
+│       ├── telephony/                     # Call alerts, SMS bridge, remote actions & Waybar telemetry
 │       └── engine/                        # Central synchronization orchestrator & deduplication
 └── client-android/                        # Mobile Client (Android Kotlin + Jetpack Compose)
     ├── build.gradle.kts                   # Root Gradle build configuration
@@ -36,6 +37,7 @@ continuity-hub/
             └── java/com/continuityhub/
                 ├── MainActivity.kt        # Jetpack Compose UI (Bottom Navigation: Hub + Trackpad)
                 ├── ui/                    # Remote Trackpad Screen, Gestures & Shortcut Chips
+                ├── telephony/             # Call state monitor, SMS receiver & telemetry monitor
                 ├── service/               # Foreground Service (ContinuityService)
                 ├── crypto/                # RSA keypair & X.509 self-signed cert generation
                 ├── transport/             # mTLS SSLSocket/SSLServerSocket & TOFU TrustManager
@@ -81,6 +83,12 @@ continuity-hub/
   - Dedicated Left, Middle, and Right mouse buttons with press-and-hold drag support.
 - **Live Text & Voice Typing:** Type or dictate text on Android to stream text into the focused Hyprland application.
 - **Adaptive Tabbed Navigation:** Seamless bottom bar toggling between the Hub dashboard and full-screen remote trackpad.
+
+### 📞 Phase 5: Telephony, SMS Continuity & Device Health Telemetry
+- **Incoming Call Alerts & Remote Actions:** High-urgency native D-Bus notification when phone rings, displaying Caller ID & Contact Name, with action buttons to **Mute Ringer**, **Decline Call**, or **Decline & Send SMS** (`CallActionRequest` executed over mTLS). Automatically dismisses when answered or ended.
+- **SMS Continuity & Outbound Dispatch:** Intercepts incoming SMS on Android (`SmsReceiver`) and routes to desktop with quick reply capability. Compose and dispatch SMS from the desktop terminal: `continuity-daemon --send-sms "+15551234567:Message body"`.
+- **Real-Time Battery & Network Telemetry:** Live streaming of battery percentage, charging type (Fast/AC/Wireless), temperature (°C), network connection (WiFi SSID / Cellular 5G/LTE), carrier name, and signal strength bars.
+- **Waybar & Hyprpanel Integration:** Atomic status export to `/tmp/continuity-waybar.json` and CLI query endpoint (`continuity-daemon --waybar`) formatted with Nerd Font glyphs (`󰂀 85% ⚡`) and rich multi-line tooltips for instant integration into status bars.
 
 ---
 

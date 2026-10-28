@@ -9,8 +9,9 @@ use crate::input::InputManager;
 use crate::notifications::NotificationManager;
 use crate::proto::{
     Channel, ClipboardPayload, FileTransferMessage, HandshakeRequest, HandshakeResponse,
-    InputMessage, NotificationMessage, Packet,
+    InputMessage, NotificationMessage, Packet, TelephonyMessage,
 };
+use crate::telephony::TelephonyManager;
 use crate::transfer::FileTransferManager;
 use crate::transport::framing::PacketFramed;
 use crate::transport::tofu::TofuStore;
@@ -38,6 +39,7 @@ pub async fn run_peer_connection<S>(
     file_transfer_mgr: Arc<FileTransferManager>,
     notification_mgr: Arc<NotificationManager>,
     input_mgr: Arc<InputManager>,
+    telephony_mgr: Arc<TelephonyManager>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>>
 where
     S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
@@ -207,6 +209,23 @@ where
                                     }
                                     Err(e) => {
                                         warn!("Failed to decode InputMessage from peer {}: {}", peer_info.device_name, e);
+                                    }
+                                }
+                            }
+                            Ok(Channel::Telephony) => {
+                                match TelephonyMessage::decode(&in_packet.payload[..]) {
+                                    Ok(msg) => {
+                                        if let Some(reply) = telephony_mgr
+                                            .handle_message(msg, &peer_info.device_name, out_tx.clone())
+                                            .await
+                                        {
+                                            if let Err(e) = framed.send_packet(&reply).await {
+                                                error!("Failed to send telephony reply: {}", e);
+                                            }
+                                        }
+                                    }
+                                    Err(e) => {
+                                        warn!("Failed to decode TelephonyMessage from peer {}: {}", peer_info.device_name, e);
                                     }
                                 }
                             }

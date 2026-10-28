@@ -8,6 +8,7 @@ use tracing::{error, info, warn};
 use crate::input::InputManager;
 use crate::notifications::NotificationManager;
 use crate::proto::ClipboardPayload;
+use crate::telephony::TelephonyManager;
 use crate::transfer::FileTransferManager;
 use crate::transport::peer::{run_peer_connection, PeerInfo, PeerSession};
 use crate::transport::tofu::TofuStore;
@@ -20,9 +21,11 @@ pub struct TlsServer {
     file_transfer_mgr: Arc<FileTransferManager>,
     notification_mgr: Arc<NotificationManager>,
     input_mgr: Arc<InputManager>,
+    telephony_mgr: Arc<TelephonyManager>,
 }
 
 impl TlsServer {
+    #[allow(clippy::too_many_arguments)]
     pub async fn bind(
         addr: SocketAddr,
         server_config: Arc<rustls::ServerConfig>,
@@ -31,6 +34,7 @@ impl TlsServer {
         file_transfer_mgr: Arc<FileTransferManager>,
         notification_mgr: Arc<NotificationManager>,
         input_mgr: Arc<InputManager>,
+        telephony_mgr: Arc<TelephonyManager>,
     ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
         let listener = TcpListener::bind(addr).await?;
         let acceptor = TlsAcceptor::from(server_config);
@@ -43,6 +47,7 @@ impl TlsServer {
             file_transfer_mgr,
             notification_mgr,
             input_mgr,
+            telephony_mgr,
         })
     }
 
@@ -63,6 +68,7 @@ impl TlsServer {
                     let file_transfer_mgr = Arc::clone(&self.file_transfer_mgr);
                     let notification_mgr = Arc::clone(&self.notification_mgr);
                     let input_mgr = Arc::clone(&self.input_mgr);
+                    let telephony_mgr = Arc::clone(&self.telephony_mgr);
 
                     tokio::spawn(async move {
                         info!("Incoming connection from {}", remote_addr);
@@ -79,6 +85,7 @@ impl TlsServer {
                                     file_transfer_mgr,
                                     notification_mgr,
                                     input_mgr,
+                                    telephony_mgr,
                                 )
                                 .await
                                 {

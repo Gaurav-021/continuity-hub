@@ -33,6 +33,15 @@ import com.continuityhub.proto.NotificationDismiss
 import com.continuityhub.proto.NotificationMessage
 import com.continuityhub.proto.NotificationPayload
 import com.continuityhub.proto.Packet
+import com.continuityhub.proto.CallActionRequest
+import com.continuityhub.proto.CallEvent
+import com.continuityhub.proto.DeviceTelemetry
+import com.continuityhub.proto.SendSmsRequest
+import com.continuityhub.proto.SendSmsResponse
+import com.continuityhub.proto.SmsMessage
+import com.continuityhub.proto.TelephonyMessage
+import com.continuityhub.telephony.DeviceTelemetryMonitor
+import com.continuityhub.telephony.TelephonyCallManager
 import com.continuityhub.transfer.AndroidFileTransferManager
 import com.continuityhub.transport.PacketFraming
 import com.continuityhub.transport.TlsManager
@@ -62,6 +71,8 @@ class ContinuityService : Service() {
     private lateinit var discoveryManager: NsdDiscoveryManager
     private lateinit var clipboardManager: AndroidClipboardManager
     private lateinit var fileTransferManager: AndroidFileTransferManager
+    private lateinit var telephonyCallManager: TelephonyCallManager
+    private lateinit var telemetryMonitor: DeviceTelemetryMonitor
 
     private val activeSessions = ConcurrentHashMap<String, PeerSession>()
     private val connectingPeers = ConcurrentHashMap.newKeySet<String>()
@@ -96,6 +107,7 @@ class ContinuityService : Service() {
         val clipboardLogsState = MutableStateFlow<List<ClipboardLog>>(emptyList())
         val fileTransfersState = MutableStateFlow<List<FileTransferItem>>(emptyList())
         val notificationsState = MutableStateFlow<List<MirroredNotificationItem>>(emptyList())
+        val telemetryState = MutableStateFlow<DeviceTelemetry?>(null)
 
         fun start(context: Context) {
             val intent = Intent(context, ContinuityService::class.java)
@@ -124,6 +136,19 @@ class ContinuityService : Service() {
 
         fun sendInput(inputMsg: InputMessage) {
             instance?.sendInputInternal(inputMsg)
+        }
+
+        fun broadcastCallEvent(call: CallEvent) {
+            instance?.broadcastCallEventInternal(call)
+        }
+
+        fun broadcastSmsMessage(sms: SmsMessage) {
+            instance?.broadcastSmsMessageInternal(sms)
+        }
+
+        fun broadcastTelemetry(telemetry: DeviceTelemetry) {
+            telemetryState.value = telemetry
+            instance?.broadcastTelemetryInternal(telemetry)
         }
     }
 
@@ -165,6 +190,8 @@ class ContinuityService : Service() {
         }
 
         discoveryManager = NsdDiscoveryManager(this, deviceId)
+        telephonyCallManager = TelephonyCallManager(this)
+        telemetryMonitor = DeviceTelemetryMonitor(this, scope)
 
         startTlsServer(port, config)
         startDiscoveryAndAdvertising(config)
@@ -405,6 +432,18 @@ class ContinuityService : Service() {
                     Channel.CHANNEL_INPUT -> {
                         Log.d(tag, "Received input from $peerDeviceName")
                     }
+                    Channel.CHANNEL_TELEPHONY -> {
+                        val telephonyMsg = TelephonyMessage.parseFrom(packet.payload)
+                        when (telephonyMsg.msgCase) {
+                            TelephonyMessage.MsgCase.CALL_ACTION -> {
+                                telephonyCallManager.executeCallAction(telephonyMsg.callAction)
+                            }
+                            TelephonyMessage.MsgCase.SEND_SMS -> {
+                                handleSendSmsRequest(telephonyMsg.sendSms)
+                            }
+                            else -> {}
+                        }
+                    }
                     else -> {
                         Log.d(tag, "Unhandled channel ${packet.channel} from $peerDeviceName")
                     }
@@ -556,6 +595,67 @@ class ContinuityService : Service() {
         }
     }
 
+    private fun broadcastCallEventInternal(call: CallEvent) {
+        val msg = TelephonyMessage.newBuilder().setCallEvent(call).build()
+        sendTelephonyMessage(msg)
+    }
+
+    private fun broadcastSmsMessageInternal(sms: SmsMessage) {
+        val msg = TelephonyMessage.newBuilder().setSmsMessage(sms).build()
+        sendTelephonyMessage(msg)
+    }
+
+    private fun broadcastTelemetryInternal(telemetry: DeviceTelemetry) {
+        val msg = TelephonyMessage.newBuilder().setTelemetry(telemetry).build()
+        sendTelephonyMessage(msg)
+    }
+
+    private fun handleSendSmsRequest(req: SendSmsRequest) {
+        try {
+            @Suppress("DEPRECATION")
+            val smsManager = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                getSystemService(android.telephony.SmsManager::class.java)
+            } else {
+                android.telephony.SmsManager.getDefault()
+            }
+            smsManager?.sendTextMessage(req.phoneNumber, null, req.body, null, null)
+
+            val resp = SendSmsResponse.newBuilder()
+                .setRequestId(req.requestId)
+                .setSuccess(true)
+                .build()
+            sendTelephonyMessage(TelephonyMessage.newBuilder().setSendSmsResp(resp).build())
+            Log.i(tag, "Dispatched outbound SMS to ${req.phoneNumber} requested by desktop")
+        } catch (e: Exception) {
+            Log.e(tag, "Failed to send outbound SMS: ${e.message}")
+            val resp = SendSmsResponse.newBuilder()
+                .setRequestId(req.requestId)
+                .setSuccess(false)
+                .setErrorMessage(e.message ?: "SMS delivery error")
+                .build()
+            sendTelephonyMessage(TelephonyMessage.newBuilder().setSendSmsResp(resp).build())
+        }
+    }
+
+    private fun sendTelephonyMessage(msg: TelephonyMessage) {
+        val packet = Packet.newBuilder()
+            .setSessionId(deviceConfigState.value?.deviceId ?: "")
+            .setSequenceNumber(sequenceNumber.incrementAndGet())
+            .setChannel(Channel.CHANNEL_TELEPHONY)
+            .setPayload(msg.toByteString())
+            .build()
+
+        for ((_, session) in activeSessions) {
+            scope.launch {
+                try {
+                    session.sendPacket(packet)
+                } catch (e: Exception) {
+                    Log.w(tag, "Failed sending telephony message to ${session.deviceName}: ${e.message}")
+                }
+            }
+        }
+    }
+
     private fun addMirroredNotification(item: MirroredNotificationItem) {
         val current = notificationsState.value.toMutableList()
         current.add(0, item)
@@ -581,6 +681,7 @@ class ContinuityService : Service() {
         discoveryManager.stopDiscovery()
         discoveryManager.unregisterService()
         clipboardManager.release()
+        telemetryMonitor.release()
         for ((_, session) in activeSessions) {
             try { session.socket.close() } catch (_: Exception) {}
         }

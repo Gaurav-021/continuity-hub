@@ -5,5 +5,6 @@ pub mod input;
 pub mod notifications;
 pub mod platform;
 pub mod proto;
+pub mod telephony;
 pub mod transfer;
 pub mod transport;

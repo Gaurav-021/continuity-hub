@@ -32,7 +32,10 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Message
 import androidx.compose.material.icons.automirrored.filled.OpenInNew
+import androidx.compose.material.icons.filled.BatteryChargingFull
+import androidx.compose.material.icons.filled.Call
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Devices
@@ -97,6 +100,15 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private val telephonyPermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) { permissions ->
+        val granted = permissions.entries.all { it.value }
+        if (granted) {
+            Toast.makeText(this, "Telephony & SMS permissions granted", Toast.LENGTH_SHORT).show()
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
@@ -153,6 +165,39 @@ class MainActivity : ComponentActivity() {
                                 "Hey! Are you working on the Continuity engine?"
                             )
                             Toast.makeText(this, "Sent test notification alert to desktop", Toast.LENGTH_SHORT).show()
+                        },
+                        onTestCallAlert = {
+                            val call = com.continuityhub.proto.CallEvent.newBuilder()
+                                .setCallId(java.util.UUID.randomUUID().toString())
+                                .setPhoneNumber("+1 (555) 234-5678")
+                                .setContactName("Sarah Connor")
+                                .setState(com.continuityhub.proto.CallEvent.CallState.CALL_STATE_RINGING)
+                                .setTimestampMs(System.currentTimeMillis())
+                                .build()
+                            ContinuityService.broadcastCallEvent(call)
+                            Toast.makeText(this, "Simulating incoming call alert on desktop...", Toast.LENGTH_SHORT).show()
+                        },
+                        onTestSmsAlert = {
+                            val sms = com.continuityhub.proto.SmsMessage.newBuilder()
+                                .setMessageId(java.util.UUID.randomUUID().toString())
+                                .setPhoneNumber("+1 (555) 876-5432")
+                                .setContactName("John Doe")
+                                .setBody("Hey! Are we still meeting for lunch at 12:30?")
+                                .setTimestampMs(System.currentTimeMillis())
+                                .setIsIncoming(true)
+                                .build()
+                            ContinuityService.broadcastSmsMessage(sms)
+                            Toast.makeText(this, "Simulating incoming SMS on desktop...", Toast.LENGTH_SHORT).show()
+                        },
+                        onRequestTelephonyPermissions = {
+                            telephonyPermissionLauncher.launch(
+                                arrayOf(
+                                    Manifest.permission.READ_PHONE_STATE,
+                                    Manifest.permission.RECEIVE_SMS,
+                                    Manifest.permission.SEND_SMS,
+                                    Manifest.permission.READ_CONTACTS
+                                )
+                            )
                         }
                     )
                 }
@@ -206,7 +251,10 @@ fun ContinuityApp(
     onSendFileUri: (Uri) -> Unit,
     onOpenFile: (String) -> Unit,
     onOpenNotificationSettings: () -> Unit,
-    onSendTestAlert: () -> Unit
+    onSendTestAlert: () -> Unit,
+    onTestCallAlert: () -> Unit,
+    onTestSmsAlert: () -> Unit,
+    onRequestTelephonyPermissions: () -> Unit
 ) {
     val context = LocalContext.current
     val deviceConfig by ContinuityService.deviceConfigState.collectAsState()
@@ -216,6 +264,7 @@ fun ContinuityApp(
     val clipboardLogs by ContinuityService.clipboardLogsState.collectAsState()
     val fileTransfers by ContinuityService.fileTransfersState.collectAsState()
     val notifications by ContinuityService.notificationsState.collectAsState()
+    val telemetry by ContinuityService.telemetryState.collectAsState()
 
     val isNotificationListenerEnabled = NotificationManagerCompat
         .getEnabledListenerPackages(context)
@@ -389,7 +438,91 @@ fun ContinuityApp(
                 }
             }
 
-            // 3. Notification Mirroring Status Card
+            // 3. Telemetry & Cellular Status Card (Phase 5)
+            item {
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(
+                                Icons.Default.BatteryChargingFull,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.primary
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = "Device Health & Cellular Continuity",
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 16.sp
+                            )
+                        }
+                        Spacer(modifier = Modifier.height(10.dp))
+
+                        val batteryPct = telemetry?.batteryPercentage ?: 85
+                        val isCharging = telemetry?.isCharging ?: false
+                        val temp = telemetry?.batteryTemperatureC ?: 29.5f
+                        val wifi = telemetry?.wifiSsid?.takeIf { it.isNotEmpty() } ?: "Connected"
+                        val carrier = telemetry?.cellularCarrier?.takeIf { it.isNotEmpty() } ?: "Cellular"
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column {
+                                Text(
+                                    text = "Battery: $batteryPct% ${if (isCharging) "⚡ Charging" else "Discharging"}",
+                                    fontWeight = FontWeight.SemiBold,
+                                    fontSize = 14.sp
+                                )
+                                Text(
+                                    text = "Temp: ${String.format("%.1f", temp)}°C  •  Wi-Fi: $wifi  •  Carrier: $carrier",
+                                    fontSize = 12.sp,
+                                    color = Color.Gray
+                                )
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(12.dp))
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            OutlinedButton(
+                                onClick = onTestCallAlert,
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Icon(Icons.Default.Call, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("Test Call", fontSize = 12.sp)
+                            }
+
+                            OutlinedButton(
+                                onClick = onTestSmsAlert,
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Icon(Icons.AutoMirrored.Filled.Message, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("Test SMS", fontSize = 12.sp)
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Button(
+                            onClick = onRequestTelephonyPermissions,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text("Grant Phone & SMS Permissions", fontSize = 13.sp)
+                        }
+                    }
+                }
+            }
+
+            // 4. Notification Mirroring Status Card
             item {
                 Card(
                     modifier = Modifier.fillMaxWidth(),

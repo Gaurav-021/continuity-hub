@@ -15,6 +15,7 @@ use crate::input::InputManager;
 use crate::notifications::NotificationManager;
 use crate::platform::{ClipboardBackend, ClipboardItem};
 use crate::proto::{Channel, ClipboardPayload, Packet};
+use crate::telephony::TelephonyManager;
 use crate::transfer::FileTransferManager;
 use crate::transport::peer::{run_peer_connection, PeerInfo, PeerSession};
 use crate::transport::server::TlsServer;
@@ -28,6 +29,7 @@ pub struct SyncEngine {
     file_transfer_mgr: Arc<FileTransferManager>,
     notification_mgr: Arc<NotificationManager>,
     input_mgr: Arc<InputManager>,
+    telephony_mgr: Arc<TelephonyManager>,
     active_peers: Arc<RwLock<HashMap<String, mpsc::Sender<Packet>>>>,
     connecting_peers: Arc<Mutex<HashSet<String>>>,
     sequence_number: AtomicU64,
@@ -38,6 +40,7 @@ pub struct SyncEngine {
 }
 
 impl SyncEngine {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         identity: Arc<Identity>,
         tofu_store: TofuStore,
@@ -45,6 +48,7 @@ impl SyncEngine {
         file_transfer_mgr: Arc<FileTransferManager>,
         notification_mgr: Arc<NotificationManager>,
         input_mgr: Arc<InputManager>,
+        telephony_mgr: Arc<TelephonyManager>,
     ) -> Self {
         let (clip_tx, clip_rx) = mpsc::channel::<ClipboardPayload>(64);
         let (peer_tx, peer_rx) = mpsc::channel::<PeerSession>(32);
@@ -56,6 +60,7 @@ impl SyncEngine {
             file_transfer_mgr,
             notification_mgr,
             input_mgr,
+            telephony_mgr,
             active_peers: Arc::new(RwLock::new(HashMap::new())),
             connecting_peers: Arc::new(Mutex::new(HashSet::new())),
             sequence_number: AtomicU64::new(0),
@@ -72,6 +77,23 @@ impl SyncEngine {
 
     pub fn notification_manager(&self) -> Arc<NotificationManager> {
         Arc::clone(&self.notification_mgr)
+    }
+
+    pub fn telephony_manager(&self) -> Arc<TelephonyManager> {
+        Arc::clone(&self.telephony_mgr)
+    }
+
+    pub async fn send_sms(&self, phone_number: &str, body: &str) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        let packet = self.telephony_mgr.create_send_sms_packet(phone_number, body);
+        let peers = self.active_peers.read().await;
+        if peers.is_empty() {
+            return Err("No active mobile peers connected to route SMS".into());
+        }
+        for (peer_id, tx) in peers.iter() {
+            tx.send(packet.clone()).await.map_err(|e| format!("Failed to send SMS packet to peer {}: {}", peer_id, e))?;
+        }
+        info!("Dispatched SMS request to {} via connected phone", phone_number);
+        Ok(())
     }
 
     pub async fn start(self: Arc<Self>) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
@@ -97,6 +119,7 @@ impl SyncEngine {
             Arc::clone(&self.file_transfer_mgr),
             Arc::clone(&self.notification_mgr),
             Arc::clone(&self.input_mgr),
+            Arc::clone(&self.telephony_mgr),
         )
         .await?;
 
@@ -134,12 +157,14 @@ impl SyncEngine {
 
         // 4. Handle registered peer sessions
         let active_peers = Arc::clone(&self.active_peers);
+        let telephony_for_reg = Arc::clone(&self.telephony_mgr);
         tokio::spawn(async move {
             while let Some(session) = peer_reg_rx.recv().await {
                 info!(
                     "Peer '{}' ({}) successfully registered in active sessions pool",
                     session.info.device_name, session.info.device_id
                 );
+                telephony_for_reg.set_peer_name(session.info.device_name.clone()).await;
                 let mut peers = active_peers.write().await;
                 peers.insert(session.info.device_id, session.tx);
             }
@@ -218,6 +243,7 @@ impl SyncEngine {
         let file_transfer_mgr = Arc::clone(&self.file_transfer_mgr);
         let notification_mgr = Arc::clone(&self.notification_mgr);
         let input_mgr = Arc::clone(&self.input_mgr);
+        let telephony_mgr = Arc::clone(&self.telephony_mgr);
 
         tokio::spawn(async move {
             if let Err(e) = run_peer_connection(
@@ -230,6 +256,7 @@ impl SyncEngine {
                 file_transfer_mgr,
                 notification_mgr,
                 input_mgr,
+                telephony_mgr,
             )
             .await
             {
@@ -282,6 +309,7 @@ impl SyncEngine {
         let file_transfer_mgr = Arc::clone(&self.file_transfer_mgr);
         let notification_mgr = Arc::clone(&self.notification_mgr);
         let input_mgr = Arc::clone(&self.input_mgr);
+        let telephony_mgr = Arc::clone(&self.telephony_mgr);
 
         tokio::spawn(async move {
             let mut connected = false;
@@ -312,6 +340,7 @@ impl SyncEngine {
                                     Arc::clone(&file_transfer_mgr),
                                     Arc::clone(&notification_mgr),
                                     Arc::clone(&input_mgr),
+                                    Arc::clone(&telephony_mgr),
                                 )
                                 .await
                                 {

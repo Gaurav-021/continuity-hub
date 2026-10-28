@@ -13,6 +13,7 @@ enum Channel {
     CHANNEL_NOTIFICATIONS = 4;
     CHANNEL_HEARTBEAT = 5;
     CHANNEL_INPUT = 6;
+    CHANNEL_TELEPHONY = 7;
 }
 
 message Packet {
@@ -197,4 +198,94 @@ message InputMessage {
         KeyEvent key_event = 4;
     }
 }
+
+// Telephony, Call & SMS Continuity
+message CallEvent {
+    enum CallState {
+        CALL_STATE_UNKNOWN = 0;
+        CALL_STATE_RINGING = 1;
+        CALL_STATE_OFFHOOK = 2; // In call
+        CALL_STATE_IDLE = 3;    // Call ended / dismissed
+        CALL_STATE_MISSED = 4;
+    }
+    string call_id = 1;
+    string phone_number = 2;
+    string contact_name = 3;
+    CallState state = 4;
+    uint64 timestamp_ms = 5;
+}
+
+message CallActionRequest {
+    enum Action {
+        ACTION_UNKNOWN = 0;
+        ACTION_MUTE = 1;
+        ACTION_REJECT = 2;
+        ACTION_REJECT_WITH_SMS = 3;
+    }
+    string call_id = 1;
+    Action action = 2;
+    string sms_reply = 3;
+    string phone_number = 4;
+}
+
+message SmsMessage {
+    string message_id = 1;
+    string phone_number = 2;
+    string contact_name = 3;
+    string body = 4;
+    uint64 timestamp_ms = 5;
+    bool is_incoming = 6;
+}
+
+message SendSmsRequest {
+    string request_id = 1;
+    string phone_number = 2;
+    string body = 3;
+}
+
+message SendSmsResponse {
+    string request_id = 1;
+    bool success = 2;
+    string error_message = 3;
+}
+
+// Device Health & Network Telemetry
+message DeviceTelemetry {
+    enum ChargingType {
+        CHARGING_NONE = 0;
+        CHARGING_AC = 1;
+        CHARGING_USB = 2;
+        CHARGING_WIRELESS = 3;
+        CHARGING_FAST = 4;
+    }
+    enum NetworkType {
+        NETWORK_UNKNOWN = 0;
+        NETWORK_NONE = 1;
+        NETWORK_WIFI = 2;
+        NETWORK_CELLULAR_4G = 3;
+        NETWORK_CELLULAR_5G = 4;
+        NETWORK_ETHERNET = 5;
+    }
+    uint32 battery_percentage = 1;
+    bool is_charging = 2;
+    ChargingType charging_type = 3;
+    float battery_temperature_c = 4;
+    NetworkType network_type = 5;
+    string wifi_ssid = 6;
+    string cellular_carrier = 7;
+    uint32 signal_bars = 8;
+    uint64 timestamp_ms = 9;
+}
+
+message TelephonyMessage {
+    oneof msg {
+        CallEvent call_event = 1;
+        CallActionRequest call_action = 2;
+        SmsMessage sms_message = 3;
+        SendSmsRequest send_sms = 4;
+        SendSmsResponse send_sms_resp = 5;
+        DeviceTelemetry telemetry = 6;
+    }
+}
+
 

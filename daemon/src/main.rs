@@ -11,6 +11,7 @@ pub mod input;
 pub mod notifications;
 pub mod platform;
 pub mod proto;
+pub mod telephony;
 pub mod transfer;
 pub mod transport;
 
@@ -19,6 +20,7 @@ use engine::SyncEngine;
 use input::InputManager;
 use notifications::NotificationManager;
 use platform::linux::WaylandClipboardBackend;
+use telephony::TelephonyManager;
 use transfer::FileTransferManager;
 use transport::tofu::TofuStore;
 
@@ -48,10 +50,29 @@ struct Args {
     /// Send a test notification alert to the connected peer
     #[arg(long)]
     notify_peer: Option<String>,
+
+    /// Send an SMS message through connected phone (format: "phone_number:message body")
+    #[arg(long)]
+    send_sms: Option<String>,
+
+    /// Print current phone telemetry status formatted for Waybar JSON and exit
+    #[arg(long)]
+    waybar: bool,
 }
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let args = Args::parse();
+
+    if args.waybar {
+        if let Ok(content) = std::fs::read_to_string("/tmp/continuity-waybar.json") {
+            println!("{}", content.trim());
+        } else {
+            println!(r#"{{"text":"📱 Disconnected","alt":"disconnected","class":"disconnected","percentage":0,"tooltip":"No phone connected"}}"#);
+        }
+        return Ok(());
+    }
+
     let _ = rustls::crypto::ring::default_provider().install_default();
 
     let subscriber = FmtSubscriber::builder()
@@ -61,10 +82,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     tracing::subscriber::set_global_default(subscriber)
         .expect("setting default subscriber failed");
 
-    let args = Args::parse();
     let base_dir = args.config_dir.unwrap_or_else(get_base_dir);
 
-    info!("Starting Continuity Hub Daemon (Phase 3)...");
+    info!("Starting Continuity Hub Daemon (Phase 5: Telephony & Waybar)...");
     info!("Base configuration directory: {:?}", base_dir);
 
     let mut identity = Identity::load_or_generate(&base_dir)?;
@@ -91,6 +111,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         identity.config.device_id.clone(),
     ));
     let input_mgr = Arc::new(InputManager::new());
+    let telephony_mgr = Arc::new(TelephonyManager::new(
+        identity.config.device_id.clone(),
+    ));
 
     info!("File downloads directory: {:?}", file_transfer_mgr.download_dir());
 
@@ -101,6 +124,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         file_transfer_mgr,
         notification_mgr,
         input_mgr,
+        telephony_mgr,
     ));
 
     engine.clone().start().await?;
@@ -138,6 +162,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             tokio::time::sleep(tokio::time::Duration::from_millis(1500)).await;
             engine_notify.broadcast_notification("Desktop Alert", &msg, "Omarchy Linux").await;
             info!("Desktop notification alert sent: '{}'", msg);
+        });
+    }
+
+    if let Some(sms_arg) = args.send_sms {
+        let engine_sms = Arc::clone(&engine);
+        tokio::spawn(async move {
+            info!("Waiting 1.5s for peer connection before dispatching SMS...");
+            tokio::time::sleep(tokio::time::Duration::from_millis(1500)).await;
+            if let Some((number, body)) = sms_arg.split_once(':') {
+                match engine_sms.send_sms(number.trim(), body.trim()).await {
+                    Ok(_) => info!("SMS queued successfully to {}", number),
+                    Err(e) => error!("Failed to send SMS: {}", e),
+                }
+            } else {
+                error!("Invalid SMS format. Expected 'phone_number:message body'");
+            }
         });
     }
 
