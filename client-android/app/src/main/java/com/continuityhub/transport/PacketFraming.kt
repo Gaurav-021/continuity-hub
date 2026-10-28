@@ -8,16 +8,16 @@ import java.nio.ByteBuffer
 
 object PacketFraming {
 
-    @Synchronized
     fun writePacket(output: OutputStream, packet: Packet) {
         val payload = packet.toByteArray()
         val lengthBuffer = ByteBuffer.allocate(4).putInt(payload.size).array()
-        output.write(lengthBuffer)
-        output.write(payload)
-        output.flush()
+        synchronized(output) {
+            output.write(lengthBuffer)
+            output.write(payload)
+            output.flush()
+        }
     }
 
-    @Synchronized
     fun readPacket(input: InputStream): Packet {
         val lengthHeader = ByteArray(4)
         readFully(input, lengthHeader)

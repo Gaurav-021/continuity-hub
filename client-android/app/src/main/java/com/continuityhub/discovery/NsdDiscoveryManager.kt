@@ -3,8 +3,10 @@ package com.continuityhub.discovery
 import android.content.Context
 import android.net.nsd.NsdManager
 import android.net.nsd.NsdServiceInfo
+import android.net.wifi.WifiManager
 import android.util.Log
 import com.continuityhub.model.DiscoveredPeer
+import java.util.ArrayDeque
 
 class NsdDiscoveryManager(
     context: Context,
@@ -12,9 +14,14 @@ class NsdDiscoveryManager(
 ) {
     private val tag = "NsdDiscoveryManager"
     private val nsdManager = context.getSystemService(Context.NSD_SERVICE) as NsdManager
+    private val wifiManager = context.applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager
 
     private var registrationListener: NsdManager.RegistrationListener? = null
     private var discoveryListener: NsdManager.DiscoveryListener? = null
+    private var multicastLock: WifiManager.MulticastLock? = null
+
+    private val resolveQueue = ArrayDeque<Pair<NsdServiceInfo, (DiscoveredPeer) -> Unit>>()
+    private var isResolving = false
 
     companion object {
         const val SERVICE_TYPE = "_continuity._tcp"
@@ -58,6 +65,16 @@ class NsdDiscoveryManager(
     fun startDiscovery(onDeviceFound: (DiscoveredPeer) -> Unit) {
         stopDiscovery()
 
+        try {
+            multicastLock = wifiManager?.createMulticastLock("continuity_mdns_lock")?.apply {
+                setReferenceCounted(true)
+                acquire()
+                Log.i(tag, "Acquired WifiManager.MulticastLock for mDNS discovery")
+            }
+        } catch (e: Exception) {
+            Log.w(tag, "Failed to acquire MulticastLock: ${e.message}")
+        }
+
         discoveryListener = object : NsdManager.DiscoveryListener {
             override fun onDiscoveryStarted(regType: String) {
                 Log.i(tag, "NSD Service discovery started for $regType")
@@ -66,7 +83,7 @@ class NsdDiscoveryManager(
             override fun onServiceFound(service: NsdServiceInfo) {
                 Log.d(tag, "NSD Service candidate found: ${service.serviceName}")
                 if (service.serviceType.contains("_continuity")) {
-                    resolveService(service, onDeviceFound)
+                    queueResolve(service, onDeviceFound)
                 }
             }
 
@@ -95,36 +112,59 @@ class NsdDiscoveryManager(
         }
     }
 
+    @Synchronized
+    private fun queueResolve(serviceInfo: NsdServiceInfo, onDeviceFound: (DiscoveredPeer) -> Unit) {
+        resolveQueue.add(serviceInfo to onDeviceFound)
+        processNextResolve()
+    }
+
+    @Synchronized
+    private fun processNextResolve() {
+        if (isResolving || resolveQueue.isEmpty()) return
+        val (serviceInfo, onDeviceFound) = resolveQueue.poll() ?: return
+        isResolving = true
+        resolveService(serviceInfo, onDeviceFound)
+    }
+
     private fun resolveService(serviceInfo: NsdServiceInfo, onDeviceFound: (DiscoveredPeer) -> Unit) {
         val resolveListener = object : NsdManager.ResolveListener {
             override fun onResolveFailed(serviceInfo: NsdServiceInfo, errorCode: Int) {
                 Log.w(tag, "NSD Resolve failed for ${serviceInfo.serviceName} (error $errorCode)")
+                synchronized(this@NsdDiscoveryManager) {
+                    isResolving = false
+                    processNextResolve()
+                }
             }
 
             override fun onServiceResolved(resolvedInfo: NsdServiceInfo) {
-                val host = resolvedInfo.host ?: return
-                val port = resolvedInfo.port
-                val attributes = resolvedInfo.attributes
+                try {
+                    val host = resolvedInfo.host
+                    val port = resolvedInfo.port
+                    val attributes = resolvedInfo.attributes
 
-                val devIdBytes = attributes["device_id"]
-                val peerDeviceId = if (devIdBytes != null) String(devIdBytes) else ""
+                    val devIdBytes = attributes["device_id"]
+                    val peerDeviceId = if (devIdBytes != null) String(devIdBytes) else ""
 
-                // Ignore ourselves
-                if (peerDeviceId == myDeviceId || peerDeviceId.isEmpty()) {
-                    return
+                    // Ignore ourselves
+                    if (peerDeviceId.isNotEmpty() && peerDeviceId != myDeviceId && host != null) {
+                        val devNameBytes = attributes["device_name"]
+                        val peerDeviceName = if (devNameBytes != null) String(devNameBytes) else resolvedInfo.serviceName
+
+                        val peer = DiscoveredPeer(
+                            deviceId = peerDeviceId,
+                            deviceName = peerDeviceName,
+                            host = host.hostAddress ?: host.toString(),
+                            port = port
+                        )
+                        Log.i(tag, "Resolved Continuity peer: '${peer.deviceName}' (${peer.deviceId}) at ${peer.host}:${peer.port}")
+                        onDeviceFound(peer)
+                    }
+                } finally {
+                    synchronized(this@NsdDiscoveryManager) {
+                        isResolving = false
+                        processNextResolve()
+                    }
                 }
-
-                val devNameBytes = attributes["device_name"]
-                val peerDeviceName = if (devNameBytes != null) String(devNameBytes) else resolvedInfo.serviceName
-
-                val peer = DiscoveredPeer(
-                    deviceId = peerDeviceId,
-                    deviceName = peerDeviceName,
-                    host = host.hostAddress ?: host.toString(),
-                    port = port
-                )
-                Log.i(tag, "Resolved Continuity peer: '${peer.deviceName}' (${peer.deviceId}) at ${peer.host}:${peer.port}")
-                onDeviceFound(peer)
             }
         }
 
@@ -132,10 +172,29 @@ class NsdDiscoveryManager(
             nsdManager.resolveService(serviceInfo, resolveListener)
         } catch (e: Exception) {
             Log.w(tag, "Exception attempting to resolve service", e)
+            synchronized(this@NsdDiscoveryManager) {
+                isResolving = false
+                processNextResolve()
+            }
         }
     }
 
     fun stopDiscovery() {
+        multicastLock?.let {
+            try {
+                if (it.isHeld) {
+                    it.release()
+                    Log.i(tag, "Released WifiManager.MulticastLock")
+                }
+            } catch (_: Exception) {}
+            multicastLock = null
+        }
+
+        synchronized(this) {
+            resolveQueue.clear()
+            isResolving = false
+        }
+
         discoveryListener?.let {
             try {
                 nsdManager.stopServiceDiscovery(it)

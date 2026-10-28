@@ -164,7 +164,23 @@ impl FileTransferManager {
                 }
 
                 let safe_name = sanitize_filename(&header.file_name);
-                let final_path = self.download_dir.join(&safe_name);
+                let mut final_path = self.download_dir.join(&safe_name);
+                if final_path.exists() {
+                    let stem = Path::new(&safe_name)
+                        .file_stem()
+                        .and_then(|s| s.to_str())
+                        .unwrap_or("file");
+                    let ext = Path::new(&safe_name)
+                        .extension()
+                        .and_then(|e| e.to_str())
+                        .map(|e| format!(".{}", e))
+                        .unwrap_or_default();
+                    let mut counter = 1;
+                    while final_path.exists() {
+                        final_path = self.download_dir.join(format!("{} ({}){}", stem, counter, ext));
+                        counter += 1;
+                    }
+                }
                 let part_name = format!("{}.{}.part", safe_name, Uuid::new_v4());
                 let part_path = self.download_dir.join(part_name);
 
@@ -432,7 +448,11 @@ impl FileTransferManager {
         }
 
         // Wait for Final Completion Ack
-        let completion_ack = match tokio::time::timeout(std::time::Duration::from_secs(30), ack_rx.recv()).await {
+        let timeout_duration = std::cmp::max(
+            std::time::Duration::from_secs(30),
+            std::time::Duration::from_secs(file_size / (512 * 1024) + 15),
+        );
+        let completion_ack = match tokio::time::timeout(timeout_duration, ack_rx.recv()).await {
             Ok(Some(a)) => a,
             _ => {
                 self.outgoing_ack_tx.write().await.remove(&transfer_id);

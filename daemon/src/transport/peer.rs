@@ -25,9 +25,16 @@ pub struct PeerInfo {
     pub cert_fingerprint: String,
 }
 
+#[derive(Debug)]
 pub struct PeerSession {
     pub info: PeerInfo,
     pub tx: mpsc::Sender<Packet>,
+}
+
+#[derive(Debug)]
+pub enum PeerSessionEvent {
+    Register(PeerSession),
+    Unregister(String),
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -36,7 +43,7 @@ pub async fn run_peer_connection<S>(
     my_info: PeerInfo,
     is_initiator: bool,
     clipboard_tx: mpsc::Sender<ClipboardPayload>,
-    register_peer_tx: mpsc::Sender<PeerSession>,
+    register_peer_tx: mpsc::Sender<PeerSessionEvent>,
     tofu_store: TofuStore,
     file_transfer_mgr: Arc<FileTransferManager>,
     notification_mgr: Arc<NotificationManager>,
@@ -143,7 +150,7 @@ where
         tx: out_tx.clone(),
     };
 
-    if register_peer_tx.send(session).await.is_err() {
+    if register_peer_tx.send(PeerSessionEvent::Register(session)).await.is_err() {
         return Ok(());
     }
 
@@ -287,6 +294,9 @@ where
             }
         }
     }
+
+    info!("Peer '{}' ({}) connection terminated, unregistering from active sessions", peer_info.device_name, peer_info.device_id);
+    let _ = register_peer_tx.send(PeerSessionEvent::Unregister(peer_info.device_id)).await;
 
     Ok(())
 }

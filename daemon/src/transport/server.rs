@@ -12,7 +12,7 @@ use crate::notifications::NotificationManager;
 use crate::proto::ClipboardPayload;
 use crate::telephony::TelephonyManager;
 use crate::transfer::FileTransferManager;
-use crate::transport::peer::{run_peer_connection, PeerInfo, PeerSession};
+use crate::transport::peer::{run_peer_connection, PeerInfo, PeerSessionEvent};
 use crate::transport::tofu::TofuStore;
 
 pub struct TlsServer {
@@ -62,7 +62,7 @@ impl TlsServer {
     pub async fn run(
         self,
         clipboard_tx: mpsc::Sender<ClipboardPayload>,
-        register_peer_tx: mpsc::Sender<PeerSession>,
+        register_peer_tx: mpsc::Sender<PeerSessionEvent>,
     ) {
         loop {
             match self.listener.accept().await {

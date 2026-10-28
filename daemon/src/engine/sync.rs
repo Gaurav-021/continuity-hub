@@ -19,7 +19,7 @@ use crate::platform::{ClipboardBackend, ClipboardItem};
 use crate::proto::{Channel, ClipboardPayload, Packet};
 use crate::telephony::TelephonyManager;
 use crate::transfer::FileTransferManager;
-use crate::transport::peer::{run_peer_connection, PeerInfo, PeerSession};
+use crate::transport::peer::{run_peer_connection, PeerInfo, PeerSessionEvent};
 use crate::transport::server::TlsServer;
 use crate::transport::tls::{create_client_config, create_server_config};
 use crate::transport::tofu::TofuStore;
@@ -38,9 +38,9 @@ pub struct SyncEngine {
     connecting_peers: Arc<Mutex<HashSet<String>>>,
     sequence_number: AtomicU64,
     clip_tx: mpsc::Sender<ClipboardPayload>,
-    peer_tx: mpsc::Sender<PeerSession>,
+    peer_tx: mpsc::Sender<PeerSessionEvent>,
     clip_rx: Mutex<Option<mpsc::Receiver<ClipboardPayload>>>,
-    peer_rx: Mutex<Option<mpsc::Receiver<PeerSession>>>,
+    peer_rx: Mutex<Option<mpsc::Receiver<PeerSessionEvent>>>,
 }
 
 impl SyncEngine {
@@ -57,7 +57,7 @@ impl SyncEngine {
         camera_mgr: Arc<CameraManager>,
     ) -> Self {
         let (clip_tx, clip_rx) = mpsc::channel::<ClipboardPayload>(64);
-        let (peer_tx, peer_rx) = mpsc::channel::<PeerSession>(32);
+        let (peer_tx, peer_rx) = mpsc::channel::<PeerSessionEvent>(32);
 
         Self {
             identity,
@@ -186,14 +186,23 @@ impl SyncEngine {
         let active_peers = Arc::clone(&self.active_peers);
         let telephony_for_reg = Arc::clone(&self.telephony_mgr);
         tokio::spawn(async move {
-            while let Some(session) = peer_reg_rx.recv().await {
-                info!(
-                    "Peer '{}' ({}) successfully registered in active sessions pool",
-                    session.info.device_name, session.info.device_id
-                );
-                telephony_for_reg.set_peer_name(session.info.device_name.clone()).await;
-                let mut peers = active_peers.write().await;
-                peers.insert(session.info.device_id, session.tx);
+            while let Some(event) = peer_reg_rx.recv().await {
+                match event {
+                    PeerSessionEvent::Register(session) => {
+                        info!(
+                            "Peer '{}' ({}) successfully registered in active sessions pool",
+                            session.info.device_name, session.info.device_id
+                        );
+                        telephony_for_reg.set_peer_name(session.info.device_name.clone()).await;
+                        let mut peers = active_peers.write().await;
+                        peers.insert(session.info.device_id, session.tx);
+                    }
+                    PeerSessionEvent::Unregister(device_id) => {
+                        let mut peers = active_peers.write().await;
+                        peers.remove(&device_id);
+                        info!("Peer '{}' removed from active sessions pool", device_id);
+                    }
+                }
             }
         });
 
@@ -304,13 +313,14 @@ impl SyncEngine {
         client_config: Arc<rustls::ClientConfig>,
         my_info: PeerInfo,
         clip_tx: mpsc::Sender<ClipboardPayload>,
-        peer_tx: mpsc::Sender<PeerSession>,
+        peer_tx: mpsc::Sender<PeerSessionEvent>,
     ) {
         let peer_id = device.device_id.clone();
 
-        // Check if already connected
+        // Check if already connected (pruning closed channels)
         {
-            let peers = self.active_peers.read().await;
+            let mut peers = self.active_peers.write().await;
+            peers.retain(|_, tx| !tx.is_closed());
             if peers.contains_key(&peer_id) {
                 debug!("Peer {} is already connected", peer_id);
                 return;
@@ -426,7 +436,8 @@ impl SyncEngine {
             payload: payload_bytes,
         };
 
-        let peers = self.active_peers.read().await;
+        let mut peers = self.active_peers.write().await;
+        peers.retain(|_, tx| !tx.is_closed());
         if peers.is_empty() {
             debug!("No active peers connected; clipboard update stored locally only");
             return;
@@ -442,7 +453,8 @@ impl SyncEngine {
 
     pub async fn broadcast_notification(&self, title: &str, body: &str, app_name: &str) {
         let packet = self.notification_mgr.create_alert_packet(title, body, app_name);
-        let peers = self.active_peers.read().await;
+        let mut peers = self.active_peers.write().await;
+        peers.retain(|_, tx| !tx.is_closed());
         for (peer_id, tx) in peers.iter() {
             if let Err(e) = tx.send(packet.clone()).await {
                 warn!("Failed to send notification alert to peer {}: {}", peer_id, e);

@@ -1,7 +1,6 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc as std_mpsc;
 use std::sync::Arc;
-use std::time::Duration;
 use tokio::process::Command;
 use tracing::{debug, error, info, warn};
 
@@ -204,10 +203,6 @@ impl InputManager {
                 PointerCommand::Click { button_code } => {
                     ptr.button(time, button_code, ButtonState::Pressed);
                     ptr.frame();
-                    let _ = conn.flush();
-
-                    std::thread::sleep(Duration::from_millis(20));
-
                     ptr.button(time, button_code, ButtonState::Released);
                     ptr.frame();
                     let _ = conn.flush();

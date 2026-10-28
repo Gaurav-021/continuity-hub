@@ -62,6 +62,9 @@ class AndroidCameraManager(private val context: Context) {
     private var backgroundThread: HandlerThread? = null
     private var backgroundHandler: Handler? = null
 
+    @Volatile
+    private var latestFrameBytes: ByteArray? = null
+
     private val frameIndex = AtomicLong(0)
     private var frameCounter = 0
     private var lastFpsTimestamp = System.currentTimeMillis()
@@ -114,6 +117,8 @@ class AndroidCameraManager(private val context: Context) {
                 val bytes = ByteArray(buffer.remaining())
                 buffer.get(bytes)
                 image.close()
+
+                latestFrameBytes = bytes
 
                 val currentIndex = frameIndex.incrementAndGet()
                 val timestampUs = System.nanoTime() / 1000
@@ -315,19 +320,26 @@ class AndroidCameraManager(private val context: Context) {
     }
 
     fun takeSnapshot() {
-        val frame = _uiState.value.previewBitmap ?: return
+        val bytes = latestFrameBytes ?: run {
+            val frame = _uiState.value.previewBitmap ?: return
+            val stream = java.io.ByteArrayOutputStream()
+            frame.compress(Bitmap.CompressFormat.JPEG, 95, stream)
+            stream.toByteArray()
+        }
+
         scope.launch {
             val snap = CameraSnapshot.newBuilder()
                 .setSnapshotId(UUID.randomUUID().toString())
                 .setTimestampMs(System.currentTimeMillis())
                 .setWidth(_uiState.value.width)
                 .setHeight(_uiState.value.height)
+                .setImageBytes(ByteString.copyFrom(bytes))
                 .build()
 
             ContinuityService.broadcastCameraMessage(
                 CameraMessage.newBuilder().setSnapshot(snap).build()
             )
-            Log.i(tag, "Dispatched Camera Snapshot to desktop")
+            Log.i(tag, "Dispatched Camera Snapshot (${bytes.size} bytes) to desktop")
         }
     }
 

@@ -54,11 +54,19 @@ class AndroidFileTransferManager(
     private val continuityDir: File by lazy {
         val publicDownloads =
             Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
-        val dir = File(publicDownloads, "Continuity")
-        if (!dir.exists()) {
-            dir.mkdirs()
+        val publicContinuity = File(publicDownloads, "Continuity")
+        val usableDir = try {
+            if (publicContinuity.exists() || publicContinuity.mkdirs()) {
+                publicContinuity
+            } else {
+                val appExt = context.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS)
+                File(appExt ?: context.filesDir, "Continuity").apply { mkdirs() }
+            }
+        } catch (_: Exception) {
+            val appExt = context.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS)
+            File(appExt ?: context.filesDir, "Continuity").apply { mkdirs() }
         }
-        dir
+        usableDir
     }
 
     private data class IncomingState(
@@ -114,8 +122,17 @@ class AndroidFileTransferManager(
                 Log.i(tag, "Incoming FileTransferHeader: '${header.fileName}' (${header.fileSize} bytes) from $peerDeviceName")
 
                 val safeFileName = header.fileName.replace(Regex("[/\\\\?%*:|\"<>]"), "_")
-                val finalFile = File(continuityDir, safeFileName)
-                val partFile = File(continuityDir, "${safeFileName}.${UUID.randomUUID().toString().take(8)}.part")
+                var finalFile = File(continuityDir, safeFileName)
+                if (finalFile.exists()) {
+                    val nameWithoutExt = safeFileName.substringBeforeLast(".")
+                    val ext = if (safeFileName.contains(".")) ".${safeFileName.substringAfterLast(".")}" else ""
+                    var counter = 1
+                    while (finalFile.exists()) {
+                        finalFile = File(continuityDir, "$nameWithoutExt ($counter)$ext")
+                        counter++
+                    }
+                }
+                val partFile = File(continuityDir, "${finalFile.name}.${UUID.randomUUID().toString().take(8)}.part")
 
                 try {
                     val fos = FileOutputStream(partFile)

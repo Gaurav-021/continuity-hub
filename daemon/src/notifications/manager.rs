@@ -84,11 +84,18 @@ impl NotificationManager {
                             let peer_tx_clone = peer_tx.clone();
                             let active_map_cleanup = Arc::clone(&active_map);
 
+                            let notif_id_for_timeout = notif_id.clone();
+                            let map_for_timeout = Arc::clone(&active_map);
+                            tokio::spawn(async move {
+                                tokio::time::sleep(std::time::Duration::from_secs(15)).await;
+                                map_for_timeout.lock().await.remove(&notif_id_for_timeout);
+                            });
+
                             handle.wait_for_action(move |action| {
                                 debug!("Notification action clicked: {}", action);
                                 if action == "dismiss" {
                                     let req = NotificationActionRequest {
-                                        notification_id: notif_id_clone,
+                                        notification_id: notif_id_clone.clone(),
                                         action_id: "dismiss".to_string(),
                                         action_type: ActionType::ActionDismiss as i32,
                                         reply_text: String::new(),
@@ -109,9 +116,13 @@ impl NotificationManager {
                                     };
                                     let _ = peer_tx_clone.try_send(packet);
                                 }
-                            });
 
-                            active_map_cleanup.lock().await.remove(&notif_id);
+                                let notif_id_for_action = notif_id_clone;
+                                let map_for_action = Arc::clone(&active_map_cleanup);
+                                tokio::spawn(async move {
+                                    map_for_action.lock().await.remove(&notif_id_for_action);
+                                });
+                            });
                         }
                         Err(e) => {
                             debug!("notify-rust show_async error: {}, falling back to notify-send", e);

@@ -96,10 +96,38 @@ class ContinuityService : Service() {
         val deviceName: String,
         val socket: Socket,
         val inputStream: InputStream,
-        val outputStream: OutputStream
+        val outputStream: OutputStream,
+        val sessionScope: CoroutineScope
     ) {
+        private val sendChannel = kotlinx.coroutines.channels.Channel<Packet>(128)
+
+        init {
+            sessionScope.launch(Dispatchers.IO) {
+                for (packet in sendChannel) {
+                    try {
+                        PacketFraming.writePacket(outputStream, packet)
+                    } catch (e: Exception) {
+                        Log.w("PeerSession", "Error writing packet to $deviceName: ${e.message}")
+                        break
+                    }
+                }
+            }
+        }
+
         fun sendPacket(packet: Packet) {
-            PacketFraming.writePacket(outputStream, packet)
+            val result = sendChannel.trySend(packet)
+            if (result.isFailure) {
+                sessionScope.launch(Dispatchers.IO) {
+                    try {
+                        sendChannel.send(packet)
+                    } catch (_: Exception) {}
+                }
+            }
+        }
+
+        fun close() {
+            sendChannel.close()
+            try { socket.close() } catch (_: Exception) {}
         }
     }
 
@@ -420,7 +448,7 @@ class ContinuityService : Service() {
         tofuManager.updateDeviceInfo(peerFingerprint, peerDeviceId, peerDeviceName)
         Log.i(tag, "mTLS Handshake complete with peer '$peerDeviceName' ($peerDeviceId)")
 
-        val session = PeerSession(peerDeviceId, peerDeviceName, socket, input, output)
+        val session = PeerSession(peerDeviceId, peerDeviceName, socket, input, output, scope)
         activeSessions[peerDeviceId] = session
         updateConnectedPeers()
 
@@ -519,7 +547,7 @@ class ContinuityService : Service() {
         } finally {
             activeSessions.remove(peerDeviceId)
             updateConnectedPeers()
-            try { socket.close() } catch (_: Exception) {}
+            session.close()
         }
     }
 
@@ -532,14 +560,8 @@ class ContinuityService : Service() {
             .build()
 
         for ((_, session) in activeSessions) {
-            scope.launch {
-                try {
-                    session.sendPacket(packet)
-                    Log.d(tag, "Streamed clipboard payload to ${session.deviceName}")
-                } catch (e: Exception) {
-                    Log.w(tag, "Failed streaming to ${session.deviceName}: ${e.message}")
-                }
-            }
+            session.sendPacket(packet)
+            Log.d(tag, "Streamed clipboard payload to ${session.deviceName}")
         }
     }
 
@@ -650,13 +672,7 @@ class ContinuityService : Service() {
             .build()
 
         for ((_, session) in activeSessions) {
-            scope.launch {
-                try {
-                    session.sendPacket(packet)
-                } catch (e: Exception) {
-                    Log.w(tag, "Failed sending input to ${session.deviceName}: ${e.message}")
-                }
-            }
+            session.sendPacket(packet)
         }
     }
 
@@ -781,13 +797,7 @@ class ContinuityService : Service() {
             .build()
 
         for ((_, session) in activeSessions) {
-            scope.launch {
-                try {
-                    session.sendPacket(packet)
-                } catch (e: Exception) {
-                    Log.w(tag, "Failed sending camera message to ${session.deviceName}: ${e.message}")
-                }
-            }
+            session.sendPacket(packet)
         }
     }
 

@@ -105,7 +105,8 @@ class AndroidMediaManager(private val context: Context) {
     }
 
     private fun updateActiveController(controllers: List<MediaController>?) {
-        val newController = controllers?.firstOrNull()
+        val newController = controllers?.firstOrNull { it.playbackState?.state == PlaybackState.STATE_PLAYING }
+            ?: controllers?.firstOrNull()
         if (newController?.sessionToken == activeController?.sessionToken) {
             return
         }
@@ -275,9 +276,15 @@ class AndroidMediaManager(private val context: Context) {
     fun seekTo(positionMs: Long) = activeController?.transportControls?.seekTo(positionMs)
 
     private fun compressBitmap(bitmap: Bitmap): ByteArray {
+        val safeBitmap = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && bitmap.config == Bitmap.Config.HARDWARE) {
+            bitmap.copy(Bitmap.Config.ARGB_8888, false) ?: bitmap
+        } else {
+            bitmap
+        }
+
         val maxDim = 512
-        val scale = if (bitmap.width > maxDim || bitmap.height > maxDim) {
-            val maxOriginal = maxOf(bitmap.width, bitmap.height)
+        val scale = if (safeBitmap.width > maxDim || safeBitmap.height > maxDim) {
+            val maxOriginal = maxOf(safeBitmap.width, safeBitmap.height)
             maxDim.toFloat() / maxOriginal
         } else {
             1.0f
@@ -285,13 +292,13 @@ class AndroidMediaManager(private val context: Context) {
 
         val scaled = if (scale < 1.0f) {
             Bitmap.createScaledBitmap(
-                bitmap,
-                (bitmap.width * scale).toInt(),
-                (bitmap.height * scale).toInt(),
+                safeBitmap,
+                (safeBitmap.width * scale).toInt(),
+                (safeBitmap.height * scale).toInt(),
                 true
             )
         } else {
-            bitmap
+            safeBitmap
         }
 
         val stream = ByteArrayOutputStream()
