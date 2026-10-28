@@ -191,8 +191,18 @@ fun TrackpadScreen(
                             if (pointers.size == 1) {
                                 val change = pointers[0]
                                 val delta = change.positionChange()
-                                val dx = delta.x * sensitivity
-                                val dy = delta.y * sensitivity
+
+                                // Ergonomic non-linear velocity curve:
+                                // Sub-pixel precision for slow moves, dynamic acceleration for fast flicks
+                                val rawDist = kotlin.math.hypot(delta.x, delta.y)
+                                val accel = if (rawDist > 5f) {
+                                    1.0f + (rawDist - 5f).coerceAtMost(30f) * 0.045f
+                                } else {
+                                    1.0f
+                                }
+
+                                val dx = delta.x * sensitivity * accel
+                                val dy = delta.y * sensitivity * accel
 
                                 totalDx += kotlin.math.abs(dx)
                                 totalDy += kotlin.math.abs(dy)

@@ -47,6 +47,7 @@ import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material.icons.filled.TouchApp
 import androidx.compose.material.icons.filled.Upload
 import androidx.compose.material.icons.filled.UploadFile
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -58,15 +59,18 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -294,6 +298,9 @@ fun ContinuityApp(
         .contains(context.packageName)
 
     var selectedTab by remember { mutableIntStateOf(0) }
+    var showDirectConnectDialog by remember { mutableStateOf(false) }
+    var directConnectHost by remember { mutableStateOf("127.0.0.1") }
+    var directConnectPort by remember { mutableStateOf("52800") }
 
     val filePickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.GetContent()
@@ -492,6 +499,16 @@ fun ContinuityApp(
                                     )
                                 }
                             }
+                        }
+
+                        Spacer(modifier = Modifier.height(10.dp))
+                        OutlinedButton(
+                            onClick = { showDirectConnectDialog = true },
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Icon(Icons.Default.Sync, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("Connect to IP Directly (USB / Manual)", fontSize = 12.sp)
                         }
                     }
                 }
@@ -714,12 +731,54 @@ fun ContinuityApp(
                 }
             } else {
                 items(clipboardLogs) { log ->
-                    ClipboardLogItem(log)
+                    ClipboardLogItem(log, onCopyText)
                 }
             }
         }
             }
         }
+    }
+
+    if (showDirectConnectDialog) {
+        AlertDialog(
+            onDismissRequest = { showDirectConnectDialog = false },
+            title = { Text("Manual Direct Connection") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("Enter Linux desktop IP address or localhost (for adb reverse):", fontSize = 13.sp)
+                    OutlinedTextField(
+                        value = directConnectHost,
+                        onValueChange = { directConnectHost = it },
+                        label = { Text("IP Address / Host") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    OutlinedTextField(
+                        value = directConnectPort,
+                        onValueChange = { directConnectPort = it },
+                        label = { Text("Daemon Port") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        val portInt = directConnectPort.toIntOrNull() ?: 52800
+                        ContinuityService.connectDirect(directConnectHost.trim(), portInt)
+                        showDirectConnectDialog = false
+                    }
+                ) {
+                    Text("Connect")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDirectConnectDialog = false }) {
+                    Text("Cancel")
+                }
+            }
+        )
     }
 }
 
@@ -841,7 +900,7 @@ fun FileTransferCard(item: FileTransferItem, onOpenFile: (String) -> Unit) {
 }
 
 @Composable
-fun ClipboardLogItem(log: ClipboardLog) {
+fun ClipboardLogItem(log: ClipboardLog, onCopyText: (String) -> Unit) {
     val timeStr = SimpleDateFormat("HH:mm:ss", Locale.US).format(Date(log.timestamp))
 
     Card(
@@ -872,12 +931,30 @@ fun ClipboardLogItem(log: ClipboardLog) {
                 fontSize = 14.sp
             )
             Spacer(modifier = Modifier.height(4.dp))
-            Text(
-                text = "SHA-256: ${log.hash.take(16)}...",
-                fontSize = 10.sp,
-                fontFamily = FontFamily.Monospace,
-                color = Color.Gray
-            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "SHA-256: ${log.hash.take(16)}...",
+                    fontSize = 10.sp,
+                    fontFamily = FontFamily.Monospace,
+                    color = Color.Gray,
+                    modifier = Modifier.weight(1f)
+                )
+                IconButton(
+                    onClick = { onCopyText(log.preview) },
+                    modifier = Modifier.size(24.dp)
+                ) {
+                    Icon(
+                        Icons.Default.ContentCopy,
+                        contentDescription = "Copy Content",
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(16.dp)
+                    )
+                }
+            }
         }
     }
 }

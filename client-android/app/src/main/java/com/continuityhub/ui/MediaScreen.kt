@@ -43,6 +43,10 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -167,27 +171,34 @@ fun MediaScreen(
 
                 Spacer(modifier = Modifier.height(16.dp))
 
-                // Progress Bar
+                // Interactive Playback Progress Slider
                 if (mediaState.durationMs > 0) {
-                    val progress = (mediaState.positionMs.toFloat() / mediaState.durationMs.toFloat()).coerceIn(0f, 1f)
-                    LinearProgressIndicator(
-                        progress = { progress },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(6.dp)
-                            .clip(RoundedCornerShape(3.dp)),
-                        color = MaterialTheme.colorScheme.primary,
-                        trackColor = MaterialTheme.colorScheme.outlineVariant
-                    )
+                    var isSeeking by remember { mutableStateOf(false) }
+                    var seekProgress by remember { mutableFloatStateOf(0f) }
+                    val currentProgress = (mediaState.positionMs.toFloat() / mediaState.durationMs.toFloat()).coerceIn(0f, 1f)
+                    val displayProgress = if (isSeeking) seekProgress else currentProgress
 
-                    Spacer(modifier = Modifier.height(6.dp))
+                    Slider(
+                        value = displayProgress,
+                        onValueChange = {
+                            isSeeking = true
+                            seekProgress = it
+                        },
+                        onValueChangeFinished = {
+                            val targetMs = (seekProgress * mediaState.durationMs).toLong()
+                            mediaManager?.seekTo(targetMs)
+                            isSeeking = false
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    )
 
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween
                     ) {
+                        val displayPosMs = if (isSeeking) (seekProgress * mediaState.durationMs).toLong() else mediaState.positionMs
                         Text(
-                            text = formatTime(mediaState.positionMs),
+                            text = formatTime(displayPosMs),
                             fontSize = 12.sp,
                             color = MaterialTheme.colorScheme.outline
                         )

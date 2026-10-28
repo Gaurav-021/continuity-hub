@@ -215,6 +215,10 @@ class ContinuityService : Service() {
         fun syncLocalClipboard() {
             instance?.clipboardManager?.checkClipboard()
         }
+
+        fun connectDirect(host: String, port: Int = 52800) {
+            instance?.connectDirectInternal(host, port)
+        }
     }
 
     override fun onCreate() {
@@ -380,6 +384,25 @@ class ContinuityService : Service() {
                 Log.w(tag, "Failed connecting to peer ${peer.deviceName}: ${e.message}")
             } finally {
                 connectingPeers.remove(peer.deviceId)
+            }
+        }
+    }
+
+    private fun connectDirectInternal(host: String, port: Int = 52800) {
+        val config = deviceConfigState.value ?: return
+        scope.launch {
+            try {
+                Log.i(tag, "Initiating direct manual mTLS connection to $host:$port")
+                val socket = tlsManager.connect(host, port)
+                val peer = DiscoveredPeer(
+                    deviceId = "manual-$host",
+                    deviceName = "Desktop ($host)",
+                    host = host,
+                    port = port
+                )
+                handleEstablishedConnection(socket, config, isInitiator = true, suggestedPeer = peer)
+            } catch (e: Exception) {
+                Log.e(tag, "Direct connection to $host:$port failed: ${e.message}")
             }
         }
     }
