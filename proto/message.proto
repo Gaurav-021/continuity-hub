@@ -15,6 +15,7 @@ enum Channel {
     CHANNEL_INPUT = 6;
     CHANNEL_TELEPHONY = 7;
     CHANNEL_MEDIA = 8;
+    CHANNEL_CAMERA = 9;
 }
 
 message Packet {
@@ -343,6 +344,80 @@ message MediaMessage {
         MediaControlCommand control = 3;
     }
 }
+
+// Continuity Camera, Virtual Webcam & Desktop Screencast
+message CameraConfig {
+    enum Lens {
+        LENS_BACK = 0;
+        LENS_FRONT = 1;
+        LENS_WIDE = 2;
+    }
+    enum VideoFormat {
+        FORMAT_MJPEG = 0;
+        FORMAT_H264 = 1;
+    }
+    uint32 width = 1;
+    uint32 height = 2;
+    uint32 target_fps = 3;
+    Lens lens = 4;
+    VideoFormat format = 5;
+    bool torch_enabled = 6;
+    float zoom_ratio = 7;
+}
+
+message CameraControlCommand {
+    enum Action {
+        ACTION_UNKNOWN = 0;
+        ACTION_START = 1;
+        ACTION_STOP = 2;
+        ACTION_SWITCH_LENS = 3;
+        ACTION_TOGGLE_TORCH = 4;
+        ACTION_SET_ZOOM = 5;
+        ACTION_TAKE_SNAPSHOT = 6;
+        ACTION_REQUEST_DESKTOP_SCREEN = 7;
+    }
+    Action action = 1;
+    CameraConfig.Lens lens = 2;
+    bool torch = 3;
+    float zoom_ratio = 4;
+    uint32 width = 5;
+    uint32 height = 6;
+}
+
+message CameraFrame {
+    uint64 frame_index = 1;
+    uint64 timestamp_us = 2;
+    uint32 width = 3;
+    uint32 height = 4;
+    bytes frame_data = 5;
+    bool is_keyframe = 6;
+}
+
+message CameraSnapshot {
+    string snapshot_id = 1;
+    uint64 timestamp_ms = 2;
+    bytes image_bytes = 3;
+    uint32 width = 4;
+    uint32 height = 5;
+}
+
+message DesktopScreenFrame {
+    uint64 timestamp_ms = 1;
+    uint32 width = 2;
+    uint32 height = 3;
+    bytes image_bytes = 4;
+}
+
+message CameraMessage {
+    oneof msg {
+        CameraConfig config = 1;
+        CameraControlCommand control = 2;
+        CameraFrame frame = 3;
+        CameraSnapshot snapshot = 4;
+        DesktopScreenFrame desktop_screen = 5;
+    }
+}
+
 
 
 

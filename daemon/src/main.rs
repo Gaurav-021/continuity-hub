@@ -4,6 +4,7 @@ use clap::Parser;
 use tracing::{error, info, Level};
 use tracing_subscriber::FmtSubscriber;
 
+pub mod camera;
 pub mod config;
 pub mod discovery;
 pub mod engine;
@@ -16,6 +17,7 @@ pub mod telephony;
 pub mod transfer;
 pub mod transport;
 
+use camera::CameraManager;
 use config::{get_base_dir, Identity};
 use engine::SyncEngine;
 use input::InputManager;
@@ -117,6 +119,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         identity.config.device_id.clone(),
     ));
     let media_mgr = MediaManager::new(identity.config.device_id.clone());
+    let camera_mgr = CameraManager::new(identity.config.device_id.clone());
 
     info!("File downloads directory: {:?}", file_transfer_mgr.download_dir());
 
@@ -129,6 +132,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         input_mgr,
         telephony_mgr,
         media_mgr,
+        camera_mgr,
     ));
 
     engine.clone().start().await?;

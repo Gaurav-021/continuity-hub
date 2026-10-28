@@ -1,3 +1,4 @@
+pub mod camera;
 pub mod config;
 pub mod discovery;
 pub mod engine;

@@ -25,6 +25,7 @@ continuity-hub/
 │       ├── notifications/                 # D-Bus desktop notification mirroring & action handlers
 │       ├── input/                         # Wayland virtual pointer (zwlr) & keyboard (wtype) input
 │       ├── media/                         # MPRIS D-Bus interface, playback sync & smart call ducking
+│       ├── camera/                        # Continuity Camera HTTP MJPEG stream & desktop screencast
 │       ├── telephony/                     # Call alerts, SMS bridge, remote actions & Waybar telemetry
 │       └── engine/                        # Central synchronization orchestrator & deduplication
 └── client-android/                        # Mobile Client (Android Kotlin + Jetpack Compose)
@@ -36,8 +37,9 @@ continuity-hub/
             ├── AndroidManifest.xml        # Foreground & Notification Listener service declarations
             ├── proto -> ../../../../proto # Direct symlink to root proto directory
             └── java/com/continuityhub/
-                ├── MainActivity.kt        # Jetpack Compose UI (Bottom Navigation: Hub + Trackpad + Media)
-                ├── ui/                    # TrackpadScreen & MediaScreen Compose UIs
+                ├── MainActivity.kt        # Jetpack Compose UI (Bottom Navigation: Hub + Trackpad + Media + Camera)
+                ├── ui/                    # TrackpadScreen, MediaScreen & CameraScreen Compose UIs
+                ├── camera/                # AndroidCameraManager (Camera2 API streaming & desktop mirror)
                 ├── media/                 # AndroidMediaManager (MediaSessionManager & transport controls)
                 ├── telephony/             # Call state monitor, SMS receiver & telemetry monitor
                 ├── service/               # Foreground Service (ContinuityService)
@@ -99,6 +101,13 @@ continuity-hub/
 - **Desktop-to-Phone Media Control:** Control Linux desktop media players (Spotify desktop, MPV, Firefox) directly from the Android app's dedicated `MediaScreen`.
 - **Smart Call Ducking:** Automatically detects incoming phone calls (`CallEvent::Ringing`) on Linux, queries active desktop MPRIS players, pauses playing audio, and automatically resumes playback when the call ends or is dismissed.
 - **Dedicated Compose Media Screen:** Complete Jetpack Compose interface with live album artwork display, duration progress bar, time elapsed/remaining, transport buttons, and desktop media remote.
+
+### 📹 Phase 7: Continuity Camera, Virtual Webcam & Display Screencast
+- **Linux Virtual Webcam Stream (`http://127.0.0.1:52802/live.mjpg`):** Built-in async Tokio HTTP MJPEG stream server allowing instant plug-and-play video input for OBS Studio, VLC, mpv, browser video calls (Zoom / Google Meet), and V4L2 virtual cameras without extra drivers.
+- **Hardware-Accelerated Camera2 Capture:** High-definition video streaming (1080p/720p 60fps) with zero external library overhead via Android Camera2 `ImageReader`.
+- **Full Remote Camera Controls:** Remotely toggle lenses (Back Main, Front Selfie, Ultra-Wide), switch Flashlight/Torch on/off, adjust 1.0x–5.0x digital zoom, and trigger high-resolution photographic snapshots.
+- **Wayland Desktop Screencopy Mirror:** Live low-latency screen capture of the Hyprland desktop output (`grim -t jpeg`) streamed directly to the phone screen for secondary display monitoring and remote desktop control.
+- **Dedicated Jetpack Compose Camera Screen:** Live viewfinder preview, FPS counter, resolution badge, quick lens/torch toggles, zoom slider, snapshot shutter, and full-screen desktop screencast viewer.
 
 ---
 

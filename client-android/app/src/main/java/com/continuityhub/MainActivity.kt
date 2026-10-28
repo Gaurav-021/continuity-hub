@@ -78,6 +78,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.material.icons.filled.MusicNote
+import androidx.compose.material.icons.filled.Videocam
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
@@ -85,6 +86,7 @@ import com.continuityhub.model.ClipboardLog
 import com.continuityhub.model.FileTransferItem
 import com.continuityhub.model.MirroredNotificationItem
 import com.continuityhub.service.ContinuityService
+import com.continuityhub.ui.CameraScreen
 import com.continuityhub.ui.MediaScreen
 import com.continuityhub.ui.TrackpadScreen
 import java.io.File
@@ -111,6 +113,14 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private val cameraPermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { isGranted ->
+        if (isGranted) {
+            Toast.makeText(this, "Camera permission granted", Toast.LENGTH_SHORT).show()
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
@@ -124,6 +134,10 @@ class MainActivity : ComponentActivity() {
             }
         } else {
             ContinuityService.start(this)
+        }
+
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
+            cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
         }
 
         handleShareIntent(intent)
@@ -288,6 +302,7 @@ fun ContinuityApp(
                         text = when (selectedTab) {
                             1 -> "Remote Trackpad"
                             2 -> "Multimedia Sync"
+                            3 -> "Continuity Camera"
                             else -> "Continuity Hub"
                         },
                         fontWeight = FontWeight.Bold
@@ -340,6 +355,12 @@ fun ContinuityApp(
                     selected = selectedTab == 2,
                     onClick = { selectedTab = 2 }
                 )
+                NavigationBarItem(
+                    icon = { Icon(Icons.Default.Videocam, contentDescription = "Camera") },
+                    label = { Text("Camera") },
+                    selected = selectedTab == 3,
+                    onClick = { selectedTab = 3 }
+                )
             }
         }
     ) { padding ->
@@ -352,6 +373,12 @@ fun ContinuityApp(
             }
             2 -> {
                 MediaScreen(
+                    isConnected = connectedPeers.isNotEmpty(),
+                    modifier = Modifier.padding(padding)
+                )
+            }
+            3 -> {
+                CameraScreen(
                     isConnected = connectedPeers.isNotEmpty(),
                     modifier = Modifier.padding(padding)
                 )

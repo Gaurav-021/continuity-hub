@@ -5,12 +5,13 @@ use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::mpsc;
 use tracing::{debug, error, info, warn};
 
+use crate::camera::CameraManager;
 use crate::input::InputManager;
 use crate::media::MediaManager;
 use crate::notifications::NotificationManager;
 use crate::proto::{
-    Channel, ClipboardPayload, FileTransferMessage, HandshakeRequest, HandshakeResponse,
-    InputMessage, MediaMessage, NotificationMessage, Packet, TelephonyMessage,
+    CameraMessage, Channel, ClipboardPayload, FileTransferMessage, HandshakeRequest,
+    HandshakeResponse, InputMessage, MediaMessage, NotificationMessage, Packet, TelephonyMessage,
 };
 use crate::telephony::TelephonyManager;
 use crate::transfer::FileTransferManager;
@@ -42,6 +43,7 @@ pub async fn run_peer_connection<S>(
     input_mgr: Arc<InputManager>,
     telephony_mgr: Arc<TelephonyManager>,
     media_mgr: Arc<MediaManager>,
+    camera_mgr: Arc<CameraManager>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>>
 where
     S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
@@ -245,6 +247,23 @@ where
                                     }
                                     Err(e) => {
                                         warn!("Failed to decode MediaMessage from peer {}: {}", peer_info.device_name, e);
+                                    }
+                                }
+                            }
+                            Ok(Channel::Camera) => {
+                                match CameraMessage::decode(&in_packet.payload[..]) {
+                                    Ok(msg) => {
+                                        if let Some(reply) = camera_mgr
+                                            .handle_message(msg, &peer_info.device_name, out_tx.clone())
+                                            .await
+                                        {
+                                            if let Err(e) = framed.send_packet(&reply).await {
+                                                error!("Failed to send camera reply: {}", e);
+                                            }
+                                        }
+                                    }
+                                    Err(e) => {
+                                        warn!("Failed to decode CameraMessage from peer {}: {}", peer_info.device_name, e);
                                     }
                                 }
                             }

@@ -5,6 +5,7 @@ use tokio::sync::mpsc;
 use tokio_rustls::TlsAcceptor;
 use tracing::{error, info, warn};
 
+use crate::camera::CameraManager;
 use crate::input::InputManager;
 use crate::media::MediaManager;
 use crate::notifications::NotificationManager;
@@ -24,6 +25,7 @@ pub struct TlsServer {
     input_mgr: Arc<InputManager>,
     telephony_mgr: Arc<TelephonyManager>,
     media_mgr: Arc<MediaManager>,
+    camera_mgr: Arc<CameraManager>,
 }
 
 impl TlsServer {
@@ -38,6 +40,7 @@ impl TlsServer {
         input_mgr: Arc<InputManager>,
         telephony_mgr: Arc<TelephonyManager>,
         media_mgr: Arc<MediaManager>,
+        camera_mgr: Arc<CameraManager>,
     ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
         let listener = TcpListener::bind(addr).await?;
         let acceptor = TlsAcceptor::from(server_config);
@@ -52,6 +55,7 @@ impl TlsServer {
             input_mgr,
             telephony_mgr,
             media_mgr,
+            camera_mgr,
         })
     }
 
@@ -74,6 +78,7 @@ impl TlsServer {
                     let input_mgr = Arc::clone(&self.input_mgr);
                     let telephony_mgr = Arc::clone(&self.telephony_mgr);
                     let media_mgr = Arc::clone(&self.media_mgr);
+                    let camera_mgr = Arc::clone(&self.camera_mgr);
 
                     tokio::spawn(async move {
                         info!("Incoming connection from {}", remote_addr);
@@ -92,6 +97,7 @@ impl TlsServer {
                                     input_mgr,
                                     telephony_mgr,
                                     media_mgr,
+                                    camera_mgr,
                                 )
                                 .await
                                 {

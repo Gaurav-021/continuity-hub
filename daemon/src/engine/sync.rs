@@ -9,6 +9,7 @@ use tokio::sync::{mpsc, Mutex, RwLock};
 use tokio_rustls::TlsConnector;
 use tracing::{debug, error, info, warn};
 
+use crate::camera::CameraManager;
 use crate::config::Identity;
 use crate::discovery::{DiscoveredDevice, DiscoveryManager};
 use crate::input::InputManager;
@@ -32,6 +33,7 @@ pub struct SyncEngine {
     input_mgr: Arc<InputManager>,
     telephony_mgr: Arc<TelephonyManager>,
     media_mgr: Arc<MediaManager>,
+    camera_mgr: Arc<CameraManager>,
     active_peers: Arc<RwLock<HashMap<String, mpsc::Sender<Packet>>>>,
     connecting_peers: Arc<Mutex<HashSet<String>>>,
     sequence_number: AtomicU64,
@@ -52,6 +54,7 @@ impl SyncEngine {
         input_mgr: Arc<InputManager>,
         telephony_mgr: Arc<TelephonyManager>,
         media_mgr: Arc<MediaManager>,
+        camera_mgr: Arc<CameraManager>,
     ) -> Self {
         let (clip_tx, clip_rx) = mpsc::channel::<ClipboardPayload>(64);
         let (peer_tx, peer_rx) = mpsc::channel::<PeerSession>(32);
@@ -65,6 +68,7 @@ impl SyncEngine {
             input_mgr,
             telephony_mgr,
             media_mgr,
+            camera_mgr,
             active_peers: Arc::new(RwLock::new(HashMap::new())),
             connecting_peers: Arc::new(Mutex::new(HashSet::new())),
             sequence_number: AtomicU64::new(0),
@@ -91,6 +95,10 @@ impl SyncEngine {
         Arc::clone(&self.media_mgr)
     }
 
+    pub fn camera_manager(&self) -> Arc<CameraManager> {
+        Arc::clone(&self.camera_mgr)
+    }
+
     pub async fn send_sms(&self, phone_number: &str, body: &str) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let packet = self.telephony_mgr.create_send_sms_packet(phone_number, body);
         let peers = self.active_peers.read().await;
@@ -114,6 +122,9 @@ impl SyncEngine {
         // Start MPRIS D-Bus player
         let _ = self.media_mgr.start_dbus_server().await;
 
+        // Start Continuity Camera HTTP MJPEG stream server
+        let _ = self.camera_mgr.start_http_stream_server().await;
+
         let my_info = PeerInfo {
             device_id: self.identity.config.device_id.clone(),
             device_name: self.identity.config.device_name.clone(),
@@ -135,6 +146,7 @@ impl SyncEngine {
             Arc::clone(&self.input_mgr),
             Arc::clone(&self.telephony_mgr),
             Arc::clone(&self.media_mgr),
+            Arc::clone(&self.camera_mgr),
         )
         .await?;
 
@@ -260,6 +272,7 @@ impl SyncEngine {
         let input_mgr = Arc::clone(&self.input_mgr);
         let telephony_mgr = Arc::clone(&self.telephony_mgr);
         let media_mgr = Arc::clone(&self.media_mgr);
+        let camera_mgr = Arc::clone(&self.camera_mgr);
 
         tokio::spawn(async move {
             if let Err(e) = run_peer_connection(
@@ -274,6 +287,7 @@ impl SyncEngine {
                 input_mgr,
                 telephony_mgr,
                 media_mgr,
+                camera_mgr,
             )
             .await
             {
@@ -328,6 +342,7 @@ impl SyncEngine {
         let input_mgr = Arc::clone(&self.input_mgr);
         let telephony_mgr = Arc::clone(&self.telephony_mgr);
         let media_mgr = Arc::clone(&self.media_mgr);
+        let camera_mgr = Arc::clone(&self.camera_mgr);
 
         tokio::spawn(async move {
             let mut connected = false;
@@ -360,6 +375,7 @@ impl SyncEngine {
                                     Arc::clone(&input_mgr),
                                     Arc::clone(&telephony_mgr),
                                     Arc::clone(&media_mgr),
+                                    Arc::clone(&camera_mgr),
                                 )
                                 .await
                                 {

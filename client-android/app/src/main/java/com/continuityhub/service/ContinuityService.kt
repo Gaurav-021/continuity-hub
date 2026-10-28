@@ -14,6 +14,8 @@ import android.os.IBinder
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import com.continuityhub.MainActivity
+import com.continuityhub.camera.AndroidCameraManager
+import com.continuityhub.camera.CameraUiState
 import com.continuityhub.clipboard.AndroidClipboardManager
 import com.continuityhub.crypto.CryptoManager
 import com.continuityhub.discovery.NsdDiscoveryManager
@@ -25,6 +27,9 @@ import com.continuityhub.model.DiscoveredPeer
 import com.continuityhub.model.FileTransferItem
 import com.continuityhub.model.MirroredNotificationItem
 import com.continuityhub.notifications.ContinuityNotificationListener
+import com.continuityhub.proto.CameraConfig
+import com.continuityhub.proto.CameraControlCommand
+import com.continuityhub.proto.CameraMessage
 import com.continuityhub.proto.Channel
 import com.continuityhub.proto.ClipboardPayload
 import com.continuityhub.proto.FileTransferMessage
@@ -78,6 +83,7 @@ class ContinuityService : Service() {
     private lateinit var telephonyCallManager: TelephonyCallManager
     private lateinit var telemetryMonitor: DeviceTelemetryMonitor
     private lateinit var mediaManager: AndroidMediaManager
+    private lateinit var cameraManager: AndroidCameraManager
 
     private val activeSessions = ConcurrentHashMap<String, PeerSession>()
     private val connectingPeers = ConcurrentHashMap.newKeySet<String>()
@@ -114,6 +120,7 @@ class ContinuityService : Service() {
         val notificationsState = MutableStateFlow<List<MirroredNotificationItem>>(emptyList())
         val telemetryState = MutableStateFlow<DeviceTelemetry?>(null)
         val mediaState = MutableStateFlow(ActiveMediaState())
+        val cameraUiState = MutableStateFlow(CameraUiState())
 
         fun start(context: Context) {
             val intent = Intent(context, ContinuityService::class.java)
@@ -166,6 +173,12 @@ class ContinuityService : Service() {
         }
 
         fun getMediaManager(): AndroidMediaManager? = instance?.mediaManager
+
+        fun broadcastCameraMessage(msg: CameraMessage) {
+            instance?.broadcastCameraMessageInternal(msg)
+        }
+
+        fun getCameraManager(): AndroidCameraManager? = instance?.cameraManager
     }
 
     override fun onCreate() {
@@ -214,6 +227,13 @@ class ContinuityService : Service() {
         scope.launch {
             mediaManager.mediaState.collect { state ->
                 mediaState.value = state
+            }
+        }
+
+        cameraManager = AndroidCameraManager(this)
+        scope.launch {
+            cameraManager.uiState.collect { state ->
+                cameraUiState.value = state
             }
         }
 
@@ -473,6 +493,18 @@ class ContinuityService : Service() {
                         when (mediaMsg.msgCase) {
                             MediaMessage.MsgCase.CONTROL -> {
                                 mediaManager.executeRemoteCommand(mediaMsg.control)
+                            }
+                            else -> {}
+                        }
+                    }
+                    Channel.CHANNEL_CAMERA -> {
+                        val cameraMsg = CameraMessage.parseFrom(packet.payload)
+                        when (cameraMsg.msgCase) {
+                            CameraMessage.MsgCase.CONTROL -> {
+                                cameraManager.executeRemoteControl(cameraMsg.control)
+                            }
+                            CameraMessage.MsgCase.DESKTOP_SCREEN -> {
+                                cameraManager.handleDesktopScreenFrame(cameraMsg.desktopScreen)
                             }
                             else -> {}
                         }
@@ -740,10 +772,30 @@ class ContinuityService : Service() {
         broadcastMediaMessageInternal(msg)
     }
 
+    private fun broadcastCameraMessageInternal(msg: CameraMessage) {
+        val packet = Packet.newBuilder()
+            .setSessionId(deviceConfigState.value?.deviceId ?: "")
+            .setSequenceNumber(sequenceNumber.incrementAndGet())
+            .setChannel(Channel.CHANNEL_CAMERA)
+            .setPayload(msg.toByteString())
+            .build()
+
+        for ((_, session) in activeSessions) {
+            scope.launch {
+                try {
+                    session.sendPacket(packet)
+                } catch (e: Exception) {
+                    Log.w(tag, "Failed sending camera message to ${session.deviceName}: ${e.message}")
+                }
+            }
+        }
+    }
+
     override fun onDestroy() {
         super.onDestroy()
         instance = null
         Log.i(tag, "ContinuityService stopping...")
+        cameraManager.stopStreaming()
         mediaManager.stop()
         discoveryManager.stopDiscovery()
         discoveryManager.unregisterService()
