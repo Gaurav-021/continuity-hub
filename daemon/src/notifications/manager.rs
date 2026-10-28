@@ -62,6 +62,7 @@ impl NotificationManager {
                 let notif_id = payload.notification_id.clone();
                 let my_device_id = self.my_device_id.clone();
                 let active_map = Arc::clone(&self.active_notifications);
+                let actions = payload.actions.clone();
 
                 tokio::spawn(async move {
                     let mut notification = notify_rust::Notification::new();
@@ -73,6 +74,9 @@ impl NotificationManager {
                         .timeout(notify_rust::Timeout::Milliseconds(8000));
 
                     notification.action("dismiss", "Dismiss");
+                    for act in &actions {
+                        notification.action(&act.action_id, &act.label);
+                    }
 
                     match notification.show_async().await {
                         Ok(handle) => {
@@ -83,6 +87,7 @@ impl NotificationManager {
                             let my_device_id_clone = my_device_id.clone();
                             let peer_tx_clone = peer_tx.clone();
                             let active_map_cleanup = Arc::clone(&active_map);
+                            let actions_for_click = actions.clone();
 
                             let notif_id_for_timeout = notif_id.clone();
                             let map_for_timeout = Arc::clone(&active_map);
@@ -93,29 +98,35 @@ impl NotificationManager {
 
                             handle.wait_for_action(move |action| {
                                 debug!("Notification action clicked: {}", action);
-                                if action == "dismiss" {
-                                    let req = NotificationActionRequest {
-                                        notification_id: notif_id_clone.clone(),
-                                        action_id: "dismiss".to_string(),
-                                        action_type: ActionType::ActionDismiss as i32,
-                                        reply_text: String::new(),
-                                        source_device_id: my_device_id_clone,
-                                    };
-                                    let mut bytes = Vec::new();
-                                    NotificationMessage {
-                                        msg: Some(Msg::Action(req)),
-                                    }
-                                    .encode(&mut bytes)
-                                    .unwrap();
+                                let action_type = if action == "dismiss" {
+                                    ActionType::ActionDismiss
+                                } else if actions_for_click.iter().any(|a| a.action_id == action && a.is_quick_reply) {
+                                    ActionType::ActionReply
+                                } else {
+                                    ActionType::ActionClick
+                                };
 
-                                    let packet = Packet {
-                                        session_id: "dismiss".to_string(),
-                                        sequence_number: 0,
-                                        channel: Channel::Notifications as i32,
-                                        payload: bytes,
-                                    };
-                                    let _ = peer_tx_clone.try_send(packet);
+                                let req = NotificationActionRequest {
+                                    notification_id: notif_id_clone.clone(),
+                                    action_id: action.to_string(),
+                                    action_type: action_type as i32,
+                                    reply_text: String::new(),
+                                    source_device_id: my_device_id_clone,
+                                };
+                                let mut bytes = Vec::new();
+                                NotificationMessage {
+                                    msg: Some(Msg::Action(req)),
                                 }
+                                .encode(&mut bytes)
+                                .unwrap();
+
+                                let packet = Packet {
+                                    session_id: "notif-action".to_string(),
+                                    sequence_number: 0,
+                                    channel: Channel::Notifications as i32,
+                                    payload: bytes,
+                                };
+                                let _ = peer_tx_clone.try_send(packet);
 
                                 let notif_id_for_action = notif_id_clone;
                                 let map_for_action = Arc::clone(&active_map_cleanup);

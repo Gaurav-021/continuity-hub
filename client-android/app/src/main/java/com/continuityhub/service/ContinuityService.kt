@@ -117,6 +117,10 @@ class ContinuityService : Service() {
         fun sendPacket(packet: Packet) {
             val result = sendChannel.trySend(packet)
             if (result.isFailure) {
+                // For video frames, drop stale frame immediately under network backpressure
+                if (packet.channel == Channel.CHANNEL_CAMERA) {
+                    return
+                }
                 sessionScope.launch(Dispatchers.IO) {
                     try {
                         sendChannel.send(packet)
@@ -207,6 +211,10 @@ class ContinuityService : Service() {
         }
 
         fun getCameraManager(): AndroidCameraManager? = instance?.cameraManager
+
+        fun syncLocalClipboard() {
+            instance?.clipboardManager?.checkClipboard()
+        }
     }
 
     override fun onCreate() {
@@ -443,6 +451,15 @@ class ContinuityService : Service() {
                 .build()
 
             PacketFraming.writePacket(output, respPacket)
+        }
+
+        val sslSocket = socket as? javax.net.ssl.SSLSocket
+        val peerCert = sslSocket?.session?.peerCertificates?.firstOrNull()
+        val tlsFingerprint = if (peerCert != null) CryptoManager.calculateFingerprint(peerCert.encoded) else ""
+        if (tlsFingerprint.isNotEmpty() && !tlsFingerprint.equals(peerFingerprint, ignoreCase = true)) {
+            Log.e(tag, "Handshake fingerprint mismatch: TLS cert $tlsFingerprint vs claimed $peerFingerprint")
+            socket.close()
+            return
         }
 
         tofuManager.updateDeviceInfo(peerFingerprint, peerDeviceId, peerDeviceName)
@@ -699,7 +716,12 @@ class ContinuityService : Service() {
             } else {
                 android.telephony.SmsManager.getDefault()
             }
-            smsManager?.sendTextMessage(req.phoneNumber, null, req.body, null, null)
+            val parts = smsManager?.divideMessage(req.body) ?: arrayListOf(req.body)
+            if (parts.size > 1) {
+                smsManager?.sendMultipartTextMessage(req.phoneNumber, null, parts, null, null)
+            } else {
+                smsManager?.sendTextMessage(req.phoneNumber, null, req.body, null, null)
+            }
 
             val resp = SendSmsResponse.newBuilder()
                 .setRequestId(req.requestId)

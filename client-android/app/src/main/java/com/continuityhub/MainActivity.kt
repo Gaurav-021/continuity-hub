@@ -209,6 +209,8 @@ class MainActivity : ComponentActivity() {
                             telephonyPermissionLauncher.launch(
                                 arrayOf(
                                     Manifest.permission.READ_PHONE_STATE,
+                                    Manifest.permission.READ_CALL_LOG,
+                                    Manifest.permission.ANSWER_PHONE_CALLS,
                                     Manifest.permission.RECEIVE_SMS,
                                     Manifest.permission.SEND_SMS,
                                     Manifest.permission.READ_CONTACTS
@@ -219,6 +221,11 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        ContinuityService.syncLocalClipboard()
     }
 
     override fun onNewIntent(intent: Intent) {

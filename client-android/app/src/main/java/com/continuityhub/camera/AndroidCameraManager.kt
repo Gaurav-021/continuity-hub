@@ -90,8 +90,8 @@ class AndroidCameraManager(private val context: Context) {
     @SuppressLint("MissingPermission")
     fun startStreaming(
         lens: CameraConfig.Lens = _uiState.value.lens,
-        width: Int = 1920,
-        height: Int = 1080
+        width: Int = 1280,
+        height: Int = 720
     ) {
         if (_uiState.value.isStreaming) {
             stopStreaming()
@@ -109,8 +109,21 @@ class AndroidCameraManager(private val context: Context) {
             chars.get(CameraCharacteristics.LENS_FACING) == targetFacing
         } ?: cameraManager.cameraIdList.firstOrNull() ?: return
 
+        val characteristics = cameraManager.getCameraCharacteristics(cameraId)
+        val map = characteristics.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
+        val supportedSizes = map?.getOutputSizes(ImageFormat.JPEG) ?: emptyArray()
+
+        val chosenSize = supportedSizes.firstOrNull { it.width == width && it.height == height }
+            ?: supportedSizes.filter { kotlin.math.abs(it.width.toFloat() / it.height.toFloat() - 16f / 9f) < 0.05f }
+                .minByOrNull { kotlin.math.abs(it.width - width) }
+            ?: supportedSizes.minByOrNull { kotlin.math.abs(it.width - width) }
+            ?: android.util.Size(width, height)
+
+        val finalWidth = chosenSize.width
+        val finalHeight = chosenSize.height
+
         try {
-            imageReader = ImageReader.newInstance(width, height, ImageFormat.JPEG, 2)
+            imageReader = ImageReader.newInstance(finalWidth, finalHeight, ImageFormat.JPEG, 2)
             imageReader?.setOnImageAvailableListener({ reader ->
                 val image = reader.acquireLatestImage() ?: return@setOnImageAvailableListener
                 val buffer = image.planes[0].buffer
@@ -146,8 +159,8 @@ class AndroidCameraManager(private val context: Context) {
                 val frameMsg = CameraFrame.newBuilder()
                     .setFrameIndex(currentIndex)
                     .setTimestampUs(timestampUs)
-                    .setWidth(width)
-                    .setHeight(height)
+                    .setWidth(finalWidth)
+                    .setHeight(finalHeight)
                     .setFrameData(ByteString.copyFrom(bytes))
                     .setIsKeyframe(true)
                     .build()
@@ -160,7 +173,7 @@ class AndroidCameraManager(private val context: Context) {
             cameraManager.openCamera(cameraId, object : CameraDevice.StateCallback() {
                 override fun onOpened(camera: CameraDevice) {
                     cameraDevice = camera
-                    createCaptureSession(camera, width, height)
+                    createCaptureSession(camera, finalWidth, finalHeight)
                 }
 
                 override fun onDisconnected(camera: CameraDevice) {
@@ -180,14 +193,14 @@ class AndroidCameraManager(private val context: Context) {
             _uiState.value = _uiState.value.copy(
                 isStreaming = true,
                 lens = lens,
-                width = width,
-                height = height
+                width = finalWidth,
+                height = finalHeight
             )
 
             // Broadcast CameraConfig to Desktop
             val configMsg = CameraConfig.newBuilder()
-                .setWidth(width)
-                .setHeight(height)
+                .setWidth(finalWidth)
+                .setHeight(finalHeight)
                 .setTargetFps(30)
                 .setLens(lens)
                 .setFormat(CameraConfig.VideoFormat.FORMAT_MJPEG)
@@ -199,11 +212,34 @@ class AndroidCameraManager(private val context: Context) {
                 CameraMessage.newBuilder().setConfig(configMsg).build()
             )
 
-            Log.i(tag, "Camera streaming started: ${width}x$height, lens: $lens")
+            Log.i(tag, "Camera streaming started: ${finalWidth}x$finalHeight, lens: $lens")
         } catch (e: Exception) {
             Log.e(tag, "Failed to start camera streaming: ${e.message}", e)
             _uiState.value = _uiState.value.copy(isStreaming = false)
         }
+    }
+
+    private fun buildRepeatingRequestBuilder(camera: CameraDevice, targetSurface: Surface): CaptureRequest.Builder {
+        val requestBuilder = camera.createCaptureRequest(CameraDevice.TEMPLATE_RECORD)
+        requestBuilder.addTarget(targetSurface)
+
+        // Auto-focus & Auto-exposure
+        requestBuilder.set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_VIDEO)
+        requestBuilder.set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON)
+
+        // Torch
+        if (_uiState.value.isTorchOn) {
+            requestBuilder.set(CaptureRequest.FLASH_MODE, CaptureRequest.FLASH_MODE_TORCH)
+        } else {
+            requestBuilder.set(CaptureRequest.FLASH_MODE, CaptureRequest.FLASH_MODE_OFF)
+        }
+
+        // Zoom
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            requestBuilder.set(CaptureRequest.CONTROL_ZOOM_RATIO, _uiState.value.zoomRatio)
+        }
+
+        return requestBuilder
     }
 
     private fun createCaptureSession(camera: CameraDevice, width: Int, height: Int) {
@@ -215,23 +251,7 @@ class AndroidCameraManager(private val context: Context) {
             camera.createCaptureSession(surfaces, object : CameraCaptureSession.StateCallback() {
                 override fun onConfigured(session: CameraCaptureSession) {
                     captureSession = session
-                    val requestBuilder = camera.createCaptureRequest(CameraDevice.TEMPLATE_RECORD)
-                    requestBuilder.addTarget(readerSurface)
-
-                    // Auto-focus & Auto-exposure
-                    requestBuilder.set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_VIDEO)
-                    requestBuilder.set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON)
-
-                    // Torch
-                    if (_uiState.value.isTorchOn) {
-                        requestBuilder.set(CaptureRequest.FLASH_MODE, CaptureRequest.FLASH_MODE_TORCH)
-                    }
-
-                    // Zoom
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                        requestBuilder.set(CaptureRequest.CONTROL_ZOOM_RATIO, _uiState.value.zoomRatio)
-                    }
-
+                    val requestBuilder = buildRepeatingRequestBuilder(camera, readerSurface)
                     session.setRepeatingRequest(requestBuilder.build(), null, backgroundHandler)
                 }
 
@@ -286,13 +306,7 @@ class AndroidCameraManager(private val context: Context) {
         val readerSurface = imageReader?.surface ?: return
 
         try {
-            val requestBuilder = camera.createCaptureRequest(CameraDevice.TEMPLATE_RECORD)
-            requestBuilder.addTarget(readerSurface)
-            if (newTorch) {
-                requestBuilder.set(CaptureRequest.FLASH_MODE, CaptureRequest.FLASH_MODE_TORCH)
-            } else {
-                requestBuilder.set(CaptureRequest.FLASH_MODE, CaptureRequest.FLASH_MODE_OFF)
-            }
+            val requestBuilder = buildRepeatingRequestBuilder(camera, readerSurface)
             session.setRepeatingRequest(requestBuilder.build(), null, backgroundHandler)
         } catch (e: Exception) {
             Log.w(tag, "Failed to toggle torch: ${e.message}")
@@ -303,19 +317,15 @@ class AndroidCameraManager(private val context: Context) {
         val clamped = ratio.coerceIn(1.0f, 5.0f)
         _uiState.value = _uiState.value.copy(zoomRatio = clamped)
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            val session = captureSession ?: return
-            val camera = cameraDevice ?: return
-            val readerSurface = imageReader?.surface ?: return
+        val session = captureSession ?: return
+        val camera = cameraDevice ?: return
+        val readerSurface = imageReader?.surface ?: return
 
-            try {
-                val requestBuilder = camera.createCaptureRequest(CameraDevice.TEMPLATE_RECORD)
-                requestBuilder.addTarget(readerSurface)
-                requestBuilder.set(CaptureRequest.CONTROL_ZOOM_RATIO, clamped)
-                session.setRepeatingRequest(requestBuilder.build(), null, backgroundHandler)
-            } catch (e: Exception) {
-                Log.w(tag, "Failed to set zoom: ${e.message}")
-            }
+        try {
+            val requestBuilder = buildRepeatingRequestBuilder(camera, readerSurface)
+            session.setRepeatingRequest(requestBuilder.build(), null, backgroundHandler)
+        } catch (e: Exception) {
+            Log.w(tag, "Failed to set zoom: ${e.message}")
         }
     }
 

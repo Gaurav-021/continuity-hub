@@ -58,7 +58,7 @@ class TelephonyCallManager(private val context: Context) {
     }
 
     fun processCallState(state: Int, incomingNumber: String?) {
-        val number = incomingNumber ?: ""
+        val number = if (!incomingNumber.isNullOrEmpty()) incomingNumber else resolveLastCallNumber()
         val contactName = ContactUtils.resolveContactName(context, number)
 
         val protoState = when (state) {
@@ -135,6 +135,7 @@ class TelephonyCallManager(private val context: Context) {
                 == PackageManager.PERMISSION_GRANTED
             ) {
                 try {
+                    @Suppress("DEPRECATION")
                     telecomManager?.endCall()
                     Log.i(tag, "Ended active call via TelecomManager")
                 } catch (e: Exception) {
@@ -143,6 +144,29 @@ class TelephonyCallManager(private val context: Context) {
             } else {
                 Log.w(tag, "ANSWER_PHONE_CALLS permission not granted to end call")
             }
+        }
+    }
+
+    private fun resolveLastCallNumber(): String {
+        if (ContextCompat.checkSelfPermission(context, Manifest.permission.READ_CALL_LOG) != PackageManager.PERMISSION_GRANTED) {
+            return ""
+        }
+        return try {
+            val cursor = context.contentResolver.query(
+                android.provider.CallLog.Calls.CONTENT_URI,
+                arrayOf(android.provider.CallLog.Calls.NUMBER),
+                null,
+                null,
+                "${android.provider.CallLog.Calls.DATE} DESC LIMIT 1"
+            )
+            cursor?.use {
+                if (it.moveToFirst()) {
+                    val numIdx = it.getColumnIndex(android.provider.CallLog.Calls.NUMBER)
+                    if (numIdx >= 0) it.getString(numIdx) ?: "" else ""
+                } else ""
+            } ?: ""
+        } catch (_: Exception) {
+            ""
         }
     }
 }

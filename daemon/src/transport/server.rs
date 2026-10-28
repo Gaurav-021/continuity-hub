@@ -85,10 +85,17 @@ impl TlsServer {
                         match acceptor.accept(tcp_stream).await {
                             Ok(tls_stream) => {
                                 info!("TLS handshake successful for incoming connection from {}", remote_addr);
+                                let (_, conn) = tls_stream.get_ref();
+                                let peer_cert_fp = conn
+                                    .peer_certificates()
+                                    .and_then(|certs| certs.first())
+                                    .map(|cert| crate::config::calculate_fingerprint(cert.as_ref()));
+
                                 if let Err(e) = run_peer_connection(
                                     tls_stream,
                                     my_info,
                                     false,
+                                    peer_cert_fp,
                                     clip_tx,
                                     reg_tx,
                                     tofu_store,

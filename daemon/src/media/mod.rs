@@ -499,11 +499,14 @@ impl MediaManager {
                 .interface::<_, MprisPlayer>("/org/mpris/MediaPlayer2")
                 .await
             {
-                let _ = iface_ref
-                    .get()
-                    .await
-                    .playback_status_changed(iface_ref.signal_emitter())
-                    .await;
+                let player = iface_ref.get().await;
+                let emitter = iface_ref.signal_emitter();
+                let _ = player.playback_status_changed(emitter).await;
+                let _ = player.can_play_changed(emitter).await;
+                let _ = player.can_pause_changed(emitter).await;
+                let _ = player.can_go_next_changed(emitter).await;
+                let _ = player.can_go_previous_changed(emitter).await;
+                let _ = player.can_seek_changed(emitter).await;
             }
         }
     }

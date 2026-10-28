@@ -388,6 +388,23 @@ impl TelephonyManager {
         }
     }
 
+    pub async fn clear_telemetry(&self) {
+        *self.latest_telemetry.write().await = None;
+        *self.connected_peer_name.write().await = None;
+
+        let output = WaybarOutput {
+            text: "󰂃 Disconnected".to_string(),
+            alt: "disconnected".to_string(),
+            tooltip: "No mobile device connected".to_string(),
+            class: "disconnected".to_string(),
+            percentage: 0,
+        };
+
+        if let Ok(json) = serde_json::to_string(&output) {
+            let _ = tokio::fs::write(&self.telemetry_file_path, json).await;
+        }
+    }
+
     pub fn create_send_sms_packet(&self, phone_number: &str, body: &str) -> Packet {
         let req = SendSmsRequest {
             request_id: Uuid::new_v4().to_string(),

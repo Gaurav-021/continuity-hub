@@ -47,7 +47,7 @@ impl CameraManager {
     }
 
     pub fn with_port(my_device_id: String, http_port: u16) -> Arc<Self> {
-        let (frame_tx, _) = broadcast::channel::<Vec<u8>>(16);
+        let (frame_tx, _) = broadcast::channel::<Vec<u8>>(32);
         let snapshot_path = std::env::temp_dir().join("continuity-camera-snapshot.jpg");
 
         let manager = Arc::new(Self {
@@ -119,19 +119,30 @@ impl CameraManager {
                         }
 
                         let mut frame_rx = manager.frame_tx.subscribe();
-                        while let Ok(frame_bytes) = frame_rx.recv().await {
-                            let part_header = format!(
-                                "--frame\r\nContent-Type: image/jpeg\r\nContent-Length: {}\r\n\r\n",
-                                frame_bytes.len()
-                            );
-                            if stream.write_all(part_header.as_bytes()).await.is_err() {
-                                break;
-                            }
-                            if stream.write_all(&frame_bytes).await.is_err() {
-                                break;
-                            }
-                            if stream.write_all(b"\r\n").await.is_err() {
-                                break;
+                        loop {
+                            match frame_rx.recv().await {
+                                Ok(frame_bytes) => {
+                                    let part_header = format!(
+                                        "--frame\r\nContent-Type: image/jpeg\r\nContent-Length: {}\r\n\r\n",
+                                        frame_bytes.len()
+                                    );
+                                    if stream.write_all(part_header.as_bytes()).await.is_err() {
+                                        break;
+                                    }
+                                    if stream.write_all(&frame_bytes).await.is_err() {
+                                        break;
+                                    }
+                                    if stream.write_all(b"\r\n").await.is_err() {
+                                        break;
+                                    }
+                                }
+                                Err(broadcast::error::RecvError::Lagged(skipped)) => {
+                                    debug!("Camera MJPEG HTTP client lagged, skipped {} frames", skipped);
+                                    continue;
+                                }
+                                Err(broadcast::error::RecvError::Closed) => {
+                                    break;
+                                }
                             }
                         }
                     } else if path.starts_with("/snapshot.jpg") {

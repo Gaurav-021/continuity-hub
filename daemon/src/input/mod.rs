@@ -181,9 +181,10 @@ impl InputManager {
         info!("Wayland Virtual Pointer initialized successfully (sub-millisecond latency active)");
 
         let ptr = state.pointer.as_ref().unwrap();
+        let start_time = std::time::Instant::now();
 
         while let Ok(cmd) = rx.recv() {
-            let time = 0u32;
+            let time = start_time.elapsed().as_millis() as u32;
             match cmd {
                 PointerCommand::Move { dx, dy } => {
                     ptr.motion(time, dx, dy);

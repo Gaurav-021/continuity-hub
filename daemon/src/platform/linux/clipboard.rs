@@ -56,6 +56,13 @@ impl DedupCache {
     }
 }
 
+struct FifoCleanup(PathBuf);
+impl Drop for FifoCleanup {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
+}
+
 pub struct WaylandClipboardBackend {
     dedup: Arc<Mutex<DedupCache>>,
 }
@@ -206,6 +213,7 @@ impl ClipboardBackend for WaylandClipboardBackend {
         }
 
         tokio::spawn(async move {
+            let _fifo_guard = FifoCleanup(fifo_path.clone());
             let mut watch_child = match Command::new("wl-paste")
                 .arg("--watch")
                 .arg("sh")

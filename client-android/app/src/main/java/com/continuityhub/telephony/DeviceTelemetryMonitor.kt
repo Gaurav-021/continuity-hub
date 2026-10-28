@@ -128,6 +128,7 @@ class DeviceTelemetryMonitor(
         var netType = DeviceTelemetry.NetworkType.NETWORK_NONE
         var wifiSsid = ""
         var carrierName = telephonyManager?.networkOperatorName ?: ""
+        var signalBars = 4
 
         val activeNet = connectivityManager?.activeNetwork
         val caps = connectivityManager?.getNetworkCapabilities(activeNet)
@@ -135,11 +136,27 @@ class DeviceTelemetryMonitor(
         if (caps != null) {
             if (caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)) {
                 netType = DeviceTelemetry.NetworkType.NETWORK_WIFI
-                val info = wifiManager?.connectionInfo
+                @Suppress("DEPRECATION")
+                val info = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && caps.transportInfo is android.net.wifi.WifiInfo) {
+                    caps.transportInfo as android.net.wifi.WifiInfo
+                } else {
+                    wifiManager?.connectionInfo
+                }
                 val ssid = info?.ssid ?: ""
                 wifiSsid = ssid.replace("\"", "").let { if (it == "<unknown ssid>") "Connected" else it }
+                val rssi = info?.rssi ?: -100
+                signalBars = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                    wifiManager?.calculateSignalLevel(rssi) ?: 4
+                } else {
+                    @Suppress("DEPRECATION")
+                    WifiManager.calculateSignalLevel(rssi, 5)
+                }
             } else if (caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR)) {
                 netType = DeviceTelemetry.NetworkType.NETWORK_CELLULAR_5G
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    val signalStrength = telephonyManager?.signalStrength
+                    signalBars = signalStrength?.level ?: 4
+                }
             } else if (caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET)) {
                 netType = DeviceTelemetry.NetworkType.NETWORK_ETHERNET
             }
@@ -153,7 +170,7 @@ class DeviceTelemetryMonitor(
             .setNetworkType(netType)
             .setWifiSsid(wifiSsid)
             .setCellularCarrier(carrierName)
-            .setSignalBars(4)
+            .setSignalBars(signalBars)
             .setTimestampMs(System.currentTimeMillis())
             .build()
 

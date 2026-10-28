@@ -19,16 +19,16 @@ class ContinuityNotificationListener : NotificationListenerService() {
 
     private val tag = "ContinuityNotifListener"
 
-    data class CachedReplyAction(
+    data class CachedNotificationAction(
         val pendingIntent: PendingIntent,
-        val remoteInput: RemoteInput
+        val remoteInput: RemoteInput? = null
     )
 
     companion object {
         var instance: ContinuityNotificationListener? = null
             private set
 
-        private val cachedActions = ConcurrentHashMap<String, CachedReplyAction>()
+        private val cachedActions = ConcurrentHashMap<String, CachedNotificationAction>()
 
         fun executeRemoteAction(request: NotificationActionRequest) {
             instance?.handleRemoteAction(request)
@@ -75,13 +75,14 @@ class ContinuityNotificationListener : NotificationListenerService() {
         sbn.notification.actions?.forEachIndexed { index, action ->
             val label = action.title?.toString() ?: "Action $index"
             val actionId = "$index"
-            var isReply = false
+            val remoteInput = action.remoteInputs?.firstOrNull()
+            val isReply = remoteInput != null
 
-            action.remoteInputs?.firstOrNull()?.let { remoteInput ->
-                cachedActions[notifKey] = CachedReplyAction(action.actionIntent, remoteInput)
+            if (isReply) {
+                cachedActions[notifKey] = CachedNotificationAction(action.actionIntent, remoteInput)
                 hasQuickReply = true
-                isReply = true
             }
+            cachedActions["$notifKey:$actionId"] = CachedNotificationAction(action.actionIntent, remoteInput)
 
             actionsList.add(
                 NotificationAction.newBuilder()
@@ -113,6 +114,7 @@ class ContinuityNotificationListener : NotificationListenerService() {
 
         val notifKey = sbn.key
         cachedActions.remove(notifKey)
+        cachedActions.keys.removeIf { it.startsWith("$notifKey:") }
 
         val dismiss = NotificationDismiss.newBuilder()
             .setNotificationId(notifKey)
@@ -123,13 +125,14 @@ class ContinuityNotificationListener : NotificationListenerService() {
 
     fun handleRemoteAction(request: NotificationActionRequest) {
         val notifKey = request.notificationId
-        Log.i(tag, "Executing remote notification action: ${request.actionType} on $notifKey")
+        Log.i(tag, "Executing remote notification action: ${request.actionType} on $notifKey (actionId: ${request.actionId})")
 
         when (request.actionType) {
             NotificationActionRequest.ActionType.ACTION_DISMISS -> {
                 try {
                     cancelNotification(notifKey)
                     cachedActions.remove(notifKey)
+                    cachedActions.keys.removeIf { it.startsWith("$notifKey:") }
                     Log.i(tag, "Successfully dismissed notification: $notifKey")
                 } catch (e: Exception) {
                     Log.e(tag, "Failed to dismiss notification", e)
@@ -137,8 +140,8 @@ class ContinuityNotificationListener : NotificationListenerService() {
             }
 
             NotificationActionRequest.ActionType.ACTION_REPLY -> {
-                val cached = cachedActions[notifKey]
-                if (cached != null) {
+                val cached = cachedActions["$notifKey:${request.actionId}"] ?: cachedActions[notifKey]
+                if (cached != null && cached.remoteInput != null) {
                     try {
                         val replyText = request.replyText
                         val bundle = Bundle().apply {
@@ -153,6 +156,20 @@ class ContinuityNotificationListener : NotificationListenerService() {
                     }
                 } else {
                     Log.w(tag, "No cached reply action found for $notifKey")
+                }
+            }
+
+            NotificationActionRequest.ActionType.ACTION_CLICK -> {
+                val cached = cachedActions["$notifKey:${request.actionId}"] ?: cachedActions[notifKey]
+                if (cached != null) {
+                    try {
+                        cached.pendingIntent.send(this, 0, null)
+                        Log.i(tag, "Successfully executed remote action ${request.actionId} for $notifKey")
+                    } catch (e: Exception) {
+                        Log.e(tag, "Failed executing remote action", e)
+                    }
+                } else {
+                    Log.w(tag, "No cached action found for $notifKey:${request.actionId}")
                 }
             }
 

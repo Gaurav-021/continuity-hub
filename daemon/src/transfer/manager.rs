@@ -259,8 +259,21 @@ impl FileTransferManager {
                         let calculated_checksum = hex::encode(hasher.finalize());
 
                         if calculated_checksum.eq_ignore_ascii_case(&transfer.header.sha256_checksum) {
-                            // Checksum verified! Atomic rename
-                            if let Err(e) = fs::rename(&transfer.part_path, &transfer.final_path).await {
+                            // Checksum verified! Atomic rename with copy fallback across mount boundaries
+                            let rename_result = match fs::rename(&transfer.part_path, &transfer.final_path).await {
+                                Ok(()) => Ok(()),
+                                Err(e) => {
+                                    debug!("fs::rename failed ({}), falling back to copy & remove", e);
+                                    if fs::copy(&transfer.part_path, &transfer.final_path).await.is_ok() {
+                                        let _ = fs::remove_file(&transfer.part_path).await;
+                                        Ok(())
+                                    } else {
+                                        Err(e)
+                                    }
+                                }
+                            };
+
+                            if let Err(e) = rename_result {
                                 error!("Failed to rename completed part file: {}", e);
                                 let ack = FileTransferAck {
                                     transfer_id: chunk.transfer_id.clone(),

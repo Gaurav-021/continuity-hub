@@ -42,6 +42,7 @@ pub async fn run_peer_connection<S>(
     stream: S,
     my_info: PeerInfo,
     is_initiator: bool,
+    expected_peer_fingerprint: Option<String>,
     clipboard_tx: mpsc::Sender<ClipboardPayload>,
     register_peer_tx: mpsc::Sender<PeerSessionEvent>,
     tofu_store: TofuStore,
@@ -131,6 +132,15 @@ where
             payload: resp_bytes,
         };
         framed.send_packet(&packet).await?;
+    }
+
+    if let Some(ref expected_fp) = expected_peer_fingerprint {
+        if !expected_fp.eq_ignore_ascii_case(&peer_info.cert_fingerprint) {
+            return Err(format!(
+                "Handshake fingerprint mismatch: presented TLS cert {}, but claims {} in handshake payload!",
+                expected_fp, peer_info.cert_fingerprint
+            ).into());
+        }
     }
 
     info!(

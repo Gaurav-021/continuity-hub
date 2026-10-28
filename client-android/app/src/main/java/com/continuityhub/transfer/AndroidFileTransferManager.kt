@@ -198,8 +198,20 @@ class AndroidFileTransferManager(
 
                         val calculatedHash = state.digest.digest().joinToString("") { "%02x".format(it) }
                         if (calculatedHash.equals(state.header.sha256Checksum, ignoreCase = true)) {
-                            // Checksum matched!
-                            if (state.partFile.renameTo(state.finalFile)) {
+                            // Checksum matched! Atomic rename with copy fallback across mount boundaries
+                            val renamed = if (state.partFile.renameTo(state.finalFile)) {
+                                true
+                            } else {
+                                try {
+                                    state.partFile.copyTo(state.finalFile, overwrite = true)
+                                    state.partFile.delete()
+                                    true
+                                } catch (_: Exception) {
+                                    false
+                                }
+                            }
+
+                            if (renamed) {
                                 Log.i(tag, "File transfer completed and verified: '${state.finalFile.name}' (${state.bytesReceived} bytes)")
                                 MediaScannerConnection.scanFile(
                                     context,
@@ -335,36 +347,49 @@ class AndroidFileTransferManager(
         Log.i(tag, "Peer accepted file transfer. Streaming chunks...")
 
         // Stream Chunks
-        contentResolver.openInputStream(uri)?.use { input ->
-            val buffer = ByteArray(CHUNK_SIZE)
-            var chunkIndex = 0L
-            var offset = 0L
-            var read: Int
+        if (fileSize == 0L) {
+            val chunk = FileChunk.newBuilder()
+                .setTransferId(transferId)
+                .setChunkIndex(0)
+                .setOffset(0)
+                .setData(ByteString.EMPTY)
+                .setIsLastChunk(true)
+                .build()
+            sendPacket(wrapPacket(FileTransferMessage.newBuilder().setChunk(chunk).build()))
+            updateTransferProgress(transferId, 0)
+        } else {
+            contentResolver.openInputStream(uri)?.use { input ->
+                val buffer = ByteArray(CHUNK_SIZE)
+                var chunkIndex = 0L
+                var offset = 0L
+                var read: Int
 
-            while (input.read(buffer).also { read = it } != -1) {
-                val isLast = (offset + read >= fileSize) || read == 0
+                while (input.read(buffer).also { read = it } != -1) {
+                    val isLast = (offset + read >= fileSize) || read == 0
 
-                val chunk = FileChunk.newBuilder()
-                    .setTransferId(transferId)
-                    .setChunkIndex(chunkIndex)
-                    .setOffset(offset)
-                    .setData(ByteString.copyFrom(buffer, 0, read))
-                    .setIsLastChunk(isLast)
-                    .build()
+                    val chunk = FileChunk.newBuilder()
+                        .setTransferId(transferId)
+                        .setChunkIndex(chunkIndex)
+                        .setOffset(offset)
+                        .setData(ByteString.copyFrom(buffer, 0, read))
+                        .setIsLastChunk(isLast)
+                        .build()
 
-                val packet = wrapPacket(FileTransferMessage.newBuilder().setChunk(chunk).build())
-                sendPacket(packet)
+                    val packet = wrapPacket(FileTransferMessage.newBuilder().setChunk(chunk).build())
+                    sendPacket(packet)
 
-                offset += read
-                chunkIndex++
-                updateTransferProgress(transferId, offset)
+                    offset += read
+                    chunkIndex++
+                    updateTransferProgress(transferId, offset)
 
-                if (isLast) break
+                    if (isLast) break
+                }
             }
         }
 
-        // Wait for Completion Ack
-        val finalAck = withTimeoutOrNull(30000) { ackChannel.receive() }
+        // Wait for Completion Ack with dynamic timeout
+        val dynamicTimeoutMs = maxOf(30000L, (fileSize / (512 * 1024)) * 1000L + 15000L)
+        val finalAck = withTimeoutOrNull(dynamicTimeoutMs) { ackChannel.receive() }
         outgoingAcks.remove(transferId)
 
         return if (finalAck?.status == FileTransferAck.Status.STATUS_COMPLETED) {

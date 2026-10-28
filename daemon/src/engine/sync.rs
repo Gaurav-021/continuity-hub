@@ -185,6 +185,7 @@ impl SyncEngine {
         // 4. Handle registered peer sessions
         let active_peers = Arc::clone(&self.active_peers);
         let telephony_for_reg = Arc::clone(&self.telephony_mgr);
+        let media_for_reg = Arc::clone(&self.media_mgr);
         tokio::spawn(async move {
             while let Some(event) = peer_reg_rx.recv().await {
                 match event {
@@ -201,6 +202,10 @@ impl SyncEngine {
                         let mut peers = active_peers.write().await;
                         peers.remove(&device_id);
                         info!("Peer '{}' removed from active sessions pool", device_id);
+                        if peers.is_empty() {
+                            telephony_for_reg.clear_telemetry().await;
+                            media_for_reg.unduck_media().await;
+                        }
                     }
                 }
             }
@@ -273,6 +278,12 @@ impl SyncEngine {
         let tls_stream = connector.connect(server_name, tcp_stream).await?;
         info!("mTLS Handshake established to {}", addr);
 
+        let (_, conn) = tls_stream.get_ref();
+        let peer_cert_fp = conn
+            .peer_certificates()
+            .and_then(|certs| certs.first())
+            .map(|cert| crate::config::calculate_fingerprint(cert.as_ref()));
+
         let clip_tx = self.clip_tx.clone();
         let peer_tx = self.peer_tx.clone();
         let tofu_store = self.tofu_store.clone();
@@ -288,6 +299,7 @@ impl SyncEngine {
                 tls_stream,
                 my_info,
                 true,
+                peer_cert_fp,
                 clip_tx,
                 peer_tx,
                 tofu_store,
@@ -373,10 +385,18 @@ impl SyncEngine {
                             Ok(tls_stream) => {
                                 info!("Outbound TLS connection established to {}", device.device_name);
                                 connected = true;
+
+                                let (_, conn) = tls_stream.get_ref();
+                                let peer_cert_fp = conn
+                                    .peer_certificates()
+                                    .and_then(|certs| certs.first())
+                                    .map(|cert| crate::config::calculate_fingerprint(cert.as_ref()));
+
                                 if let Err(e) = run_peer_connection(
                                     tls_stream,
                                     my_info.clone(),
                                     true,
+                                    peer_cert_fp,
                                     clip_tx.clone(),
                                     peer_tx.clone(),
                                     tofu_store.clone(),
