@@ -17,6 +17,8 @@ import com.continuityhub.MainActivity
 import com.continuityhub.clipboard.AndroidClipboardManager
 import com.continuityhub.crypto.CryptoManager
 import com.continuityhub.discovery.NsdDiscoveryManager
+import com.continuityhub.media.ActiveMediaState
+import com.continuityhub.media.AndroidMediaManager
 import com.continuityhub.model.ClipboardLog
 import com.continuityhub.model.DeviceConfig
 import com.continuityhub.model.DiscoveredPeer
@@ -29,6 +31,8 @@ import com.continuityhub.proto.FileTransferMessage
 import com.continuityhub.proto.HandshakeRequest
 import com.continuityhub.proto.HandshakeResponse
 import com.continuityhub.proto.InputMessage
+import com.continuityhub.proto.MediaControlCommand
+import com.continuityhub.proto.MediaMessage
 import com.continuityhub.proto.NotificationDismiss
 import com.continuityhub.proto.NotificationMessage
 import com.continuityhub.proto.NotificationPayload
@@ -73,6 +77,7 @@ class ContinuityService : Service() {
     private lateinit var fileTransferManager: AndroidFileTransferManager
     private lateinit var telephonyCallManager: TelephonyCallManager
     private lateinit var telemetryMonitor: DeviceTelemetryMonitor
+    private lateinit var mediaManager: AndroidMediaManager
 
     private val activeSessions = ConcurrentHashMap<String, PeerSession>()
     private val connectingPeers = ConcurrentHashMap.newKeySet<String>()
@@ -108,6 +113,7 @@ class ContinuityService : Service() {
         val fileTransfersState = MutableStateFlow<List<FileTransferItem>>(emptyList())
         val notificationsState = MutableStateFlow<List<MirroredNotificationItem>>(emptyList())
         val telemetryState = MutableStateFlow<DeviceTelemetry?>(null)
+        val mediaState = MutableStateFlow(ActiveMediaState())
 
         fun start(context: Context) {
             val intent = Intent(context, ContinuityService::class.java)
@@ -150,6 +156,16 @@ class ContinuityService : Service() {
             telemetryState.value = telemetry
             instance?.broadcastTelemetryInternal(telemetry)
         }
+
+        fun broadcastMediaMessage(msg: MediaMessage) {
+            instance?.broadcastMediaMessageInternal(msg)
+        }
+
+        fun sendDesktopMediaCommand(command: MediaControlCommand.Command, seekPositionMs: Long = 0L) {
+            instance?.sendDesktopMediaCommandInternal(command, seekPositionMs)
+        }
+
+        fun getMediaManager(): AndroidMediaManager? = instance?.mediaManager
     }
 
     override fun onCreate() {
@@ -192,6 +208,14 @@ class ContinuityService : Service() {
         discoveryManager = NsdDiscoveryManager(this, deviceId)
         telephonyCallManager = TelephonyCallManager(this)
         telemetryMonitor = DeviceTelemetryMonitor(this, scope)
+
+        mediaManager = AndroidMediaManager(this)
+        mediaManager.start()
+        scope.launch {
+            mediaManager.mediaState.collect { state ->
+                mediaState.value = state
+            }
+        }
 
         startTlsServer(port, config)
         startDiscoveryAndAdvertising(config)
@@ -444,6 +468,15 @@ class ContinuityService : Service() {
                             else -> {}
                         }
                     }
+                    Channel.CHANNEL_MEDIA -> {
+                        val mediaMsg = MediaMessage.parseFrom(packet.payload)
+                        when (mediaMsg.msgCase) {
+                            MediaMessage.MsgCase.CONTROL -> {
+                                mediaManager.executeRemoteCommand(mediaMsg.control)
+                            }
+                            else -> {}
+                        }
+                    }
                     else -> {
                         Log.d(tag, "Unhandled channel ${packet.channel} from $peerDeviceName")
                     }
@@ -674,10 +707,44 @@ class ContinuityService : Service() {
         clipboardLogsState.value = current
     }
 
+    private fun broadcastMediaMessageInternal(msg: MediaMessage) {
+        val packet = Packet.newBuilder()
+            .setSessionId(deviceConfigState.value?.deviceId ?: "")
+            .setSequenceNumber(sequenceNumber.incrementAndGet())
+            .setChannel(Channel.CHANNEL_MEDIA)
+            .setPayload(msg.toByteString())
+            .build()
+
+        for ((_, session) in activeSessions) {
+            scope.launch {
+                try {
+                    session.sendPacket(packet)
+                } catch (e: Exception) {
+                    Log.w(tag, "Failed sending media message to ${session.deviceName}: ${e.message}")
+                }
+            }
+        }
+    }
+
+    private fun sendDesktopMediaCommandInternal(command: MediaControlCommand.Command, seekPositionMs: Long) {
+        val cmd = MediaControlCommand.newBuilder()
+            .setCommand(command)
+            .setSeekPositionMs(seekPositionMs)
+            .setVolume(1.0f)
+            .build()
+
+        val msg = MediaMessage.newBuilder()
+            .setControl(cmd)
+            .build()
+
+        broadcastMediaMessageInternal(msg)
+    }
+
     override fun onDestroy() {
         super.onDestroy()
         instance = null
         Log.i(tag, "ContinuityService stopping...")
+        mediaManager.stop()
         discoveryManager.stopDiscovery()
         discoveryManager.unregisterService()
         clipboardManager.release()

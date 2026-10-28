@@ -24,6 +24,7 @@ continuity-hub/
 │       ├── transfer/                      # High-throughput P2P file transfer & SHA-256 streaming
 │       ├── notifications/                 # D-Bus desktop notification mirroring & action handlers
 │       ├── input/                         # Wayland virtual pointer (zwlr) & keyboard (wtype) input
+│       ├── media/                         # MPRIS D-Bus interface, playback sync & smart call ducking
 │       ├── telephony/                     # Call alerts, SMS bridge, remote actions & Waybar telemetry
 │       └── engine/                        # Central synchronization orchestrator & deduplication
 └── client-android/                        # Mobile Client (Android Kotlin + Jetpack Compose)
@@ -35,8 +36,9 @@ continuity-hub/
             ├── AndroidManifest.xml        # Foreground & Notification Listener service declarations
             ├── proto -> ../../../../proto # Direct symlink to root proto directory
             └── java/com/continuityhub/
-                ├── MainActivity.kt        # Jetpack Compose UI (Bottom Navigation: Hub + Trackpad)
-                ├── ui/                    # Remote Trackpad Screen, Gestures & Shortcut Chips
+                ├── MainActivity.kt        # Jetpack Compose UI (Bottom Navigation: Hub + Trackpad + Media)
+                ├── ui/                    # TrackpadScreen & MediaScreen Compose UIs
+                ├── media/                 # AndroidMediaManager (MediaSessionManager & transport controls)
                 ├── telephony/             # Call state monitor, SMS receiver & telemetry monitor
                 ├── service/               # Foreground Service (ContinuityService)
                 ├── crypto/                # RSA keypair & X.509 self-signed cert generation
@@ -89,6 +91,14 @@ continuity-hub/
 - **SMS Continuity & Outbound Dispatch:** Intercepts incoming SMS on Android (`SmsReceiver`) and routes to desktop with quick reply capability. Compose and dispatch SMS from the desktop terminal: `continuity-daemon --send-sms "+15551234567:Message body"`.
 - **Real-Time Battery & Network Telemetry:** Live streaming of battery percentage, charging type (Fast/AC/Wireless), temperature (°C), network connection (WiFi SSID / Cellular 5G/LTE), carrier name, and signal strength bars.
 - **Waybar & Hyprpanel Integration:** Atomic status export to `/tmp/continuity-waybar.json` and CLI query endpoint (`continuity-daemon --waybar`) formatted with Nerd Font glyphs (`󰂀 85% ⚡`) and rich multi-line tooltips for instant integration into status bars.
+
+### 🎵 Phase 6: Multimedia Sync & Remote Media Control (MPRIS ↔ Android MediaSession)
+- **Virtual MPRIS 2.2 Player on Linux D-Bus:** Exposes phone audio on Linux as `org.mpris.MediaPlayer2.ContinuityPhone` implementing `org.mpris.MediaPlayer2` and `org.mpris.MediaPlayer2.Player`. Fully integrated with Linux media keys, desktop audio widgets, and Waybar `mpris` module.
+- **Real-Time Track Metadata & Album Art:** Mirroring of track title, artist, album, duration, and compressed album art bytes (`/tmp/continuity-media-art.jpg`) from active Android `MediaSession`s (Spotify, YouTube Music, Podcasts, SoundCloud, etc.).
+- **Bidirectional Transport Controls:** Forward playback commands (`Play`, `Pause`, `PlayPause`, `Next`, `Previous`, `Stop`, `Seek`, `Volume`) seamlessly over `CHANNEL_MEDIA` between Linux media widgets and Android `MediaController.transportControls`.
+- **Desktop-to-Phone Media Control:** Control Linux desktop media players (Spotify desktop, MPV, Firefox) directly from the Android app's dedicated `MediaScreen`.
+- **Smart Call Ducking:** Automatically detects incoming phone calls (`CallEvent::Ringing`) on Linux, queries active desktop MPRIS players, pauses playing audio, and automatically resumes playback when the call ends or is dismissed.
+- **Dedicated Compose Media Screen:** Complete Jetpack Compose interface with live album artwork display, duration progress bar, time elapsed/remaining, transport buttons, and desktop media remote.
 
 ---
 

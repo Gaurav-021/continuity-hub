@@ -77,6 +77,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.material.icons.filled.MusicNote
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
@@ -84,6 +85,7 @@ import com.continuityhub.model.ClipboardLog
 import com.continuityhub.model.FileTransferItem
 import com.continuityhub.model.MirroredNotificationItem
 import com.continuityhub.service.ContinuityService
+import com.continuityhub.ui.MediaScreen
 import com.continuityhub.ui.TrackpadScreen
 import java.io.File
 import java.text.SimpleDateFormat
@@ -281,7 +283,16 @@ fun ContinuityApp(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text(if (selectedTab == 1) "Remote Trackpad" else "Continuity Hub", fontWeight = FontWeight.Bold) },
+                title = {
+                    Text(
+                        text = when (selectedTab) {
+                            1 -> "Remote Trackpad"
+                            2 -> "Multimedia Sync"
+                            else -> "Continuity Hub"
+                        },
+                        fontWeight = FontWeight.Bold
+                    )
+                },
                 colors = TopAppBarDefaults.topAppBarColors(
                     containerColor = MaterialTheme.colorScheme.primaryContainer,
                     titleContentColor = MaterialTheme.colorScheme.onPrimaryContainer
@@ -323,22 +334,36 @@ fun ContinuityApp(
                     selected = selectedTab == 1,
                     onClick = { selectedTab = 1 }
                 )
+                NavigationBarItem(
+                    icon = { Icon(Icons.Default.MusicNote, contentDescription = "Media") },
+                    label = { Text("Media") },
+                    selected = selectedTab == 2,
+                    onClick = { selectedTab = 2 }
+                )
             }
         }
     ) { padding ->
-        if (selectedTab == 1) {
-            TrackpadScreen(
-                isConnected = connectedPeers.isNotEmpty(),
-                modifier = Modifier.padding(padding)
-            )
-        } else {
-            LazyColumn(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(padding)
-                    .padding(16.dp),
-                verticalArrangement = Arrangement.spacedBy(16.dp)
-            ) {
+        when (selectedTab) {
+            1 -> {
+                TrackpadScreen(
+                    isConnected = connectedPeers.isNotEmpty(),
+                    modifier = Modifier.padding(padding)
+                )
+            }
+            2 -> {
+                MediaScreen(
+                    isConnected = connectedPeers.isNotEmpty(),
+                    modifier = Modifier.padding(padding)
+                )
+            }
+            else -> {
+                LazyColumn(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(padding)
+                        .padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(16.dp)
+                ) {
             // 1. Device Identity Card
             item {
                 Card(
@@ -659,6 +684,7 @@ fun ContinuityApp(
                 }
             }
         }
+            }
         }
     }
 }

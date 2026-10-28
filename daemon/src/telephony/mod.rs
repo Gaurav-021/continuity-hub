@@ -7,6 +7,7 @@ use tokio::sync::{mpsc, Mutex, RwLock};
 use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
+use crate::media::MediaManager;
 use crate::proto::{
     call_action_request::Action as CallAction,
     call_event::CallState,
@@ -32,6 +33,7 @@ pub struct TelephonyManager {
     active_call_notifications: Arc<Mutex<HashMap<String, u32>>>,
     connected_peer_name: Arc<RwLock<Option<String>>>,
     telemetry_file_path: std::path::PathBuf,
+    media_mgr: Arc<RwLock<Option<Arc<MediaManager>>>>,
 }
 
 impl TelephonyManager {
@@ -43,6 +45,7 @@ impl TelephonyManager {
             active_call_notifications: Arc::new(Mutex::new(HashMap::new())),
             connected_peer_name: Arc::new(RwLock::new(None)),
             telemetry_file_path: std::path::PathBuf::from("/tmp/continuity-waybar.json"),
+            media_mgr: Arc::new(RwLock::new(None)),
         }
     }
 
@@ -54,7 +57,12 @@ impl TelephonyManager {
             active_call_notifications: Arc::new(Mutex::new(HashMap::new())),
             connected_peer_name: Arc::new(RwLock::new(None)),
             telemetry_file_path: path,
+            media_mgr: Arc::new(RwLock::new(None)),
         }
+    }
+
+    pub async fn set_media_manager(&self, mgr: Arc<MediaManager>) {
+        *self.media_mgr.write().await = Some(mgr);
     }
 
     pub fn wrap_packet(&self, msg: TelephonyMessage) -> Packet {
@@ -134,6 +142,11 @@ impl TelephonyManager {
         match state {
             CallState::Ringing => {
                 info!("Incoming Phone Call on {}: {}", peer_name, caller_display);
+
+                // Smart Call Ducking: pause active desktop audio
+                if let Some(ref m) = *self.media_mgr.read().await {
+                    m.duck_media().await;
+                }
 
                 let call_id = call.call_id.clone();
                 let phone_num = call.phone_number.clone();
@@ -223,11 +236,22 @@ impl TelephonyManager {
                 if let Some(dbus_id) = self.active_call_notifications.lock().await.remove(&call.call_id) {
                     Self::close_desktop_notification(dbus_id).await;
                 }
+                if state == CallState::Idle {
+                    // Smart Call Ducking: resume paused desktop audio when call has ended
+                    if let Some(ref m) = *self.media_mgr.read().await {
+                        m.unduck_media().await;
+                    }
+                }
             }
             CallState::Missed => {
                 info!("Missed Phone Call from {}", caller_display);
                 if let Some(dbus_id) = self.active_call_notifications.lock().await.remove(&call.call_id) {
                     Self::close_desktop_notification(dbus_id).await;
+                }
+
+                // Smart Call Ducking: resume paused desktop audio on missed call
+                if let Some(ref m) = *self.media_mgr.read().await {
+                    m.unduck_media().await;
                 }
 
                 tokio::spawn(async move {

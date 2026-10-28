@@ -12,6 +12,7 @@ use tracing::{debug, error, info, warn};
 use crate::config::Identity;
 use crate::discovery::{DiscoveredDevice, DiscoveryManager};
 use crate::input::InputManager;
+use crate::media::MediaManager;
 use crate::notifications::NotificationManager;
 use crate::platform::{ClipboardBackend, ClipboardItem};
 use crate::proto::{Channel, ClipboardPayload, Packet};
@@ -30,6 +31,7 @@ pub struct SyncEngine {
     notification_mgr: Arc<NotificationManager>,
     input_mgr: Arc<InputManager>,
     telephony_mgr: Arc<TelephonyManager>,
+    media_mgr: Arc<MediaManager>,
     active_peers: Arc<RwLock<HashMap<String, mpsc::Sender<Packet>>>>,
     connecting_peers: Arc<Mutex<HashSet<String>>>,
     sequence_number: AtomicU64,
@@ -49,6 +51,7 @@ impl SyncEngine {
         notification_mgr: Arc<NotificationManager>,
         input_mgr: Arc<InputManager>,
         telephony_mgr: Arc<TelephonyManager>,
+        media_mgr: Arc<MediaManager>,
     ) -> Self {
         let (clip_tx, clip_rx) = mpsc::channel::<ClipboardPayload>(64);
         let (peer_tx, peer_rx) = mpsc::channel::<PeerSession>(32);
@@ -61,6 +64,7 @@ impl SyncEngine {
             notification_mgr,
             input_mgr,
             telephony_mgr,
+            media_mgr,
             active_peers: Arc::new(RwLock::new(HashMap::new())),
             connecting_peers: Arc::new(Mutex::new(HashSet::new())),
             sequence_number: AtomicU64::new(0),
@@ -83,6 +87,10 @@ impl SyncEngine {
         Arc::clone(&self.telephony_mgr)
     }
 
+    pub fn media_manager(&self) -> Arc<MediaManager> {
+        Arc::clone(&self.media_mgr)
+    }
+
     pub async fn send_sms(&self, phone_number: &str, body: &str) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let packet = self.telephony_mgr.create_send_sms_packet(phone_number, body);
         let peers = self.active_peers.read().await;
@@ -99,6 +107,12 @@ impl SyncEngine {
     pub async fn start(self: Arc<Self>) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let server_config = create_server_config(&self.identity, self.tofu_store.clone())?;
         let client_config = create_client_config(&self.identity, self.tofu_store.clone())?;
+
+        // Link media manager to telephony manager for smart call ducking
+        self.telephony_mgr.set_media_manager(Arc::clone(&self.media_mgr)).await;
+
+        // Start MPRIS D-Bus player
+        let _ = self.media_mgr.start_dbus_server().await;
 
         let my_info = PeerInfo {
             device_id: self.identity.config.device_id.clone(),
@@ -120,6 +134,7 @@ impl SyncEngine {
             Arc::clone(&self.notification_mgr),
             Arc::clone(&self.input_mgr),
             Arc::clone(&self.telephony_mgr),
+            Arc::clone(&self.media_mgr),
         )
         .await?;
 
@@ -244,6 +259,7 @@ impl SyncEngine {
         let notification_mgr = Arc::clone(&self.notification_mgr);
         let input_mgr = Arc::clone(&self.input_mgr);
         let telephony_mgr = Arc::clone(&self.telephony_mgr);
+        let media_mgr = Arc::clone(&self.media_mgr);
 
         tokio::spawn(async move {
             if let Err(e) = run_peer_connection(
@@ -257,6 +273,7 @@ impl SyncEngine {
                 notification_mgr,
                 input_mgr,
                 telephony_mgr,
+                media_mgr,
             )
             .await
             {
@@ -310,6 +327,7 @@ impl SyncEngine {
         let notification_mgr = Arc::clone(&self.notification_mgr);
         let input_mgr = Arc::clone(&self.input_mgr);
         let telephony_mgr = Arc::clone(&self.telephony_mgr);
+        let media_mgr = Arc::clone(&self.media_mgr);
 
         tokio::spawn(async move {
             let mut connected = false;
@@ -341,6 +359,7 @@ impl SyncEngine {
                                     Arc::clone(&notification_mgr),
                                     Arc::clone(&input_mgr),
                                     Arc::clone(&telephony_mgr),
+                                    Arc::clone(&media_mgr),
                                 )
                                 .await
                                 {

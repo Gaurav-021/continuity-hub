@@ -2,6 +2,7 @@ pub mod config;
 pub mod discovery;
 pub mod engine;
 pub mod input;
+pub mod media;
 pub mod notifications;
 pub mod platform;
 pub mod proto;

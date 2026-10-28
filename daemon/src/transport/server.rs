@@ -6,6 +6,7 @@ use tokio_rustls::TlsAcceptor;
 use tracing::{error, info, warn};
 
 use crate::input::InputManager;
+use crate::media::MediaManager;
 use crate::notifications::NotificationManager;
 use crate::proto::ClipboardPayload;
 use crate::telephony::TelephonyManager;
@@ -22,6 +23,7 @@ pub struct TlsServer {
     notification_mgr: Arc<NotificationManager>,
     input_mgr: Arc<InputManager>,
     telephony_mgr: Arc<TelephonyManager>,
+    media_mgr: Arc<MediaManager>,
 }
 
 impl TlsServer {
@@ -35,6 +37,7 @@ impl TlsServer {
         notification_mgr: Arc<NotificationManager>,
         input_mgr: Arc<InputManager>,
         telephony_mgr: Arc<TelephonyManager>,
+        media_mgr: Arc<MediaManager>,
     ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
         let listener = TcpListener::bind(addr).await?;
         let acceptor = TlsAcceptor::from(server_config);
@@ -48,6 +51,7 @@ impl TlsServer {
             notification_mgr,
             input_mgr,
             telephony_mgr,
+            media_mgr,
         })
     }
 
@@ -69,6 +73,7 @@ impl TlsServer {
                     let notification_mgr = Arc::clone(&self.notification_mgr);
                     let input_mgr = Arc::clone(&self.input_mgr);
                     let telephony_mgr = Arc::clone(&self.telephony_mgr);
+                    let media_mgr = Arc::clone(&self.media_mgr);
 
                     tokio::spawn(async move {
                         info!("Incoming connection from {}", remote_addr);
@@ -86,6 +91,7 @@ impl TlsServer {
                                     notification_mgr,
                                     input_mgr,
                                     telephony_mgr,
+                                    media_mgr,
                                 )
                                 .await
                                 {

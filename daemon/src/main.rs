@@ -8,6 +8,7 @@ pub mod config;
 pub mod discovery;
 pub mod engine;
 pub mod input;
+pub mod media;
 pub mod notifications;
 pub mod platform;
 pub mod proto;
@@ -18,6 +19,7 @@ pub mod transport;
 use config::{get_base_dir, Identity};
 use engine::SyncEngine;
 use input::InputManager;
+use media::MediaManager;
 use notifications::NotificationManager;
 use platform::linux::WaylandClipboardBackend;
 use telephony::TelephonyManager;
@@ -114,6 +116,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let telephony_mgr = Arc::new(TelephonyManager::new(
         identity.config.device_id.clone(),
     ));
+    let media_mgr = MediaManager::new(identity.config.device_id.clone());
 
     info!("File downloads directory: {:?}", file_transfer_mgr.download_dir());
 
@@ -125,6 +128,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         notification_mgr,
         input_mgr,
         telephony_mgr,
+        media_mgr,
     ));
 
     engine.clone().start().await?;
