@@ -128,6 +128,25 @@ impl TofuStore {
             let _ = self.persist();
         }
     }
+
+    pub fn is_trusted(&self, fingerprint: &str) -> bool {
+        let map = self.devices.read().unwrap();
+        map.get(fingerprint).map(|d| d.trusted).unwrap_or(false)
+    }
+}
+
+pub fn calculate_sas_code(fp1: &str, fp2: &str) -> String {
+    let f1 = fp1.to_uppercase();
+    let f2 = fp2.to_uppercase();
+    let combined = if f1 < f2 {
+        format!("{}:{}", f1, f2)
+    } else {
+        format!("{}:{}", f2, f1)
+    };
+    use sha2::{Digest, Sha256};
+    let hash = Sha256::digest(combined.as_bytes());
+    let val = u32::from_be_bytes([hash[0], hash[1], hash[2], hash[3]]) % 1_000_000;
+    format!("{:03} {:03}", val / 1000, val % 1000)
 }
 
 // Client-side Verifier (Validating Server Certificate)

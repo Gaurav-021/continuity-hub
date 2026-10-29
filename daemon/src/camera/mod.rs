@@ -15,6 +15,9 @@ use crate::proto::{
     Channel, DesktopScreenFrame, Packet,
 };
 
+pub mod v4l2;
+use v4l2::V4l2LoopbackWriter;
+
 #[derive(Clone, Debug)]
 pub struct CameraStatus {
     pub is_streaming: bool,
@@ -42,6 +45,7 @@ pub struct CameraManager {
     current_width: Arc<RwLock<u32>>,
     current_height: Arc<RwLock<u32>>,
     snapshot_path: PathBuf,
+    v4l2_writer: Arc<tokio::sync::Mutex<V4l2LoopbackWriter>>,
 }
 
 impl CameraManager {
@@ -52,6 +56,7 @@ impl CameraManager {
     pub fn with_port(my_device_id: String, http_port: u16) -> Arc<Self> {
         let (frame_tx, _) = broadcast::channel::<Vec<u8>>(32);
         let snapshot_path = std::env::temp_dir().join("continuity-camera-snapshot.jpg");
+        let v4l2_writer = Arc::new(tokio::sync::Mutex::new(V4l2LoopbackWriter::new()));
 
         let manager = Arc::new(Self {
             my_device_id,
@@ -68,6 +73,7 @@ impl CameraManager {
             current_width: Arc::new(RwLock::new(1920)),
             current_height: Arc::new(RwLock::new(1080)),
             snapshot_path,
+            v4l2_writer,
         });
 
         // Spawn FPS calculation ticker (every 1 second)
@@ -296,8 +302,12 @@ impl CameraManager {
         let frame_data = frame.frame_data.clone();
         *self.latest_frame.write().await = Some(frame);
 
-        // Broadcast to HTTP MJPEG clients
-        let _ = self.frame_tx.send(frame_data);
+        // 1. Broadcast to HTTP MJPEG clients
+        let _ = self.frame_tx.send(frame_data.clone());
+
+        // 2. Feed to Linux V4L2 loopback device (/dev/video10) if available
+        let mut v4l2 = self.v4l2_writer.lock().await;
+        v4l2.write_frame(&frame_data, *self.current_width.read().await, *self.current_height.read().await);
     }
 
     async fn handle_camera_config(&self, config: CameraConfig, peer_name: &str) {

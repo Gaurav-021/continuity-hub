@@ -153,6 +153,7 @@ class ContinuityService : Service() {
         val telemetryState = MutableStateFlow<DeviceTelemetry?>(null)
         val mediaState = MutableStateFlow(ActiveMediaState())
         val cameraUiState = MutableStateFlow(CameraUiState())
+        val sasCodeState = MutableStateFlow("")
 
         fun start(context: Context) {
             val intent = Intent(context, ContinuityService::class.java)
@@ -486,7 +487,9 @@ class ContinuityService : Service() {
         }
 
         tofuManager.updateDeviceInfo(peerFingerprint, peerDeviceId, peerDeviceName)
-        Log.i(tag, "mTLS Handshake complete with peer '$peerDeviceName' ($peerDeviceId)")
+        val sasCode = CryptoManager.calculateSasCode(cryptoManager.fingerprint, peerFingerprint)
+        sasCodeState.value = sasCode
+        Log.i(tag, "mTLS Handshake complete with peer '$peerDeviceName' ($peerDeviceId). Security SAS Code: $sasCode")
 
         val session = PeerSession(peerDeviceId, peerDeviceName, socket, input, output, scope)
         activeSessions[peerDeviceId] = session
@@ -586,6 +589,9 @@ class ContinuityService : Service() {
             Log.i(tag, "Peer connection ended for $peerDeviceName: ${e.message}")
         } finally {
             activeSessions.remove(peerDeviceId)
+            if (activeSessions.isEmpty()) {
+                sasCodeState.value = ""
+            }
             updateConnectedPeers()
             session.close()
         }

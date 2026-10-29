@@ -16,6 +16,7 @@ pub mod proto;
 pub mod telephony;
 pub mod transfer;
 pub mod transport;
+pub mod tray;
 
 use camera::CameraManager;
 use config::{get_base_dir, Identity};
@@ -27,6 +28,7 @@ use platform::DefaultClipboardBackend;
 use telephony::TelephonyManager;
 use transfer::FileTransferManager;
 use transport::tofu::TofuStore;
+use tray::TrayManager;
 
 #[derive(Parser, Debug)]
 #[command(author, version, about = "Continuity Hub Daemon for Linux Wayland")]
@@ -120,6 +122,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     ));
     let media_mgr = MediaManager::new(identity.config.device_id.clone());
     let camera_mgr = CameraManager::new(identity.config.device_id.clone());
+    let tray_mgr = Arc::new(TrayManager::new());
+    telephony_mgr.set_tray_manager(Arc::clone(&tray_mgr)).await;
+    let _ = tray_mgr.start().await;
 
     info!("File downloads directory: {:?}", file_transfer_mgr.download_dir());
 

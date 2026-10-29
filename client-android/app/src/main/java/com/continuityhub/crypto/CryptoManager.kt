@@ -88,5 +88,19 @@ class CryptoManager(private val context: Context) {
             val hash = md.digest(der)
             return hash.joinToString(":") { "%02X".format(it) }
         }
+
+        fun calculateSasCode(fp1: String, fp2: String): String {
+            val f1 = fp1.uppercase()
+            val f2 = fp2.uppercase()
+            val combined = if (f1 < f2) "$f1:$f2" else "$f2:$f1"
+            val md = MessageDigest.getInstance("SHA-256")
+            val hash = md.digest(combined.toByteArray(Charsets.UTF_8))
+            val num = ((hash[0].toLong() and 0xFF) shl 24) or
+                      ((hash[1].toLong() and 0xFF) shl 16) or
+                      ((hash[2].toLong() and 0xFF) shl 8) or
+                      (hash[3].toLong() and 0xFF)
+            val code = (num % 1_000_000L).toInt()
+            return String.format("%03d %03d", code / 1000, code % 1000)
+        }
     }
 }

@@ -10,3 +10,4 @@ pub mod proto;
 pub mod telephony;
 pub mod transfer;
 pub mod transport;
+pub mod tray;

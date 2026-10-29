@@ -34,6 +34,7 @@ pub struct TelephonyManager {
     connected_peer_name: Arc<RwLock<Option<String>>>,
     telemetry_file_path: std::path::PathBuf,
     media_mgr: Arc<RwLock<Option<Arc<MediaManager>>>>,
+    tray_mgr: Arc<RwLock<Option<Arc<crate::tray::TrayManager>>>>,
 }
 
 impl TelephonyManager {
@@ -50,6 +51,7 @@ impl TelephonyManager {
                 std::env::temp_dir().join("continuity-telemetry.json")
             },
             media_mgr: Arc::new(RwLock::new(None)),
+            tray_mgr: Arc::new(RwLock::new(None)),
         }
     }
 
@@ -62,11 +64,16 @@ impl TelephonyManager {
             connected_peer_name: Arc::new(RwLock::new(None)),
             telemetry_file_path: path,
             media_mgr: Arc::new(RwLock::new(None)),
+            tray_mgr: Arc::new(RwLock::new(None)),
         }
     }
 
     pub async fn set_media_manager(&self, mgr: Arc<MediaManager>) {
         *self.media_mgr.write().await = Some(mgr);
+    }
+
+    pub async fn set_tray_manager(&self, tray: Arc<crate::tray::TrayManager>) {
+        *self.tray_mgr.write().await = Some(tray);
     }
 
     pub fn wrap_packet(&self, msg: TelephonyMessage) -> Packet {
@@ -402,12 +409,20 @@ impl TelephonyManager {
             if let Ok(json) = serde_json::to_string(&output) {
                 let _ = tokio::fs::write(&self.telemetry_file_path, json).await;
             }
+
+            if let Some(ref tray) = *self.tray_mgr.read().await {
+                tray.update_telemetry(&peer_name, t.battery_percentage, t.is_charging, t.battery_temperature_c, &net_str).await;
+            }
         }
     }
 
     pub async fn clear_telemetry(&self) {
         *self.latest_telemetry.write().await = None;
         *self.connected_peer_name.write().await = None;
+
+        if let Some(ref tray) = *self.tray_mgr.read().await {
+            tray.clear_telemetry().await;
+        }
 
         let output = WaybarOutput {
             text: "󰂃 Disconnected".to_string(),

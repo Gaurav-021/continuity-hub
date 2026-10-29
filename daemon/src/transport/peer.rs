@@ -143,10 +143,31 @@ where
         }
     }
 
-    info!(
-        "Handshake completed successfully with peer '{}' ({})",
-        peer_info.device_name, peer_info.device_id
+    let sas_code = crate::transport::tofu::calculate_sas_code(
+        &my_info.cert_fingerprint,
+        &peer_info.cert_fingerprint,
     );
+
+    info!(
+        "Handshake completed successfully with peer '{}' ({}). SAS Security Verification Code: [ {} ]",
+        peer_info.device_name, peer_info.device_id, sas_code
+    );
+
+    #[cfg(target_os = "linux")]
+    {
+        let dev_name = peer_info.device_name.clone();
+        let code = sas_code.clone();
+        tokio::spawn(async move {
+            let mut notification = notify_rust::Notification::new();
+            notification
+                .appname("Continuity Hub")
+                .summary("Device Connected")
+                .body(&format!("Connected to '{}'\nSecurity Code: {}", dev_name, code))
+                .icon("security-high")
+                .timeout(notify_rust::Timeout::Milliseconds(7000));
+            let _ = notification.show_async().await;
+        });
+    }
 
     tofu_store.update_device_info(
         &peer_info.cert_fingerprint,

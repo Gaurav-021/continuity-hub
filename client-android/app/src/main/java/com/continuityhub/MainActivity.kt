@@ -21,6 +21,7 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -49,6 +50,7 @@ import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Error
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.NotificationsActive
+import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material.icons.filled.TouchApp
 import androidx.compose.material.icons.filled.Upload
@@ -304,6 +306,7 @@ fun ContinuityApp(
     val fileTransfers by ContinuityService.fileTransfersState.collectAsState()
     val notifications by ContinuityService.notificationsState.collectAsState()
     val telemetry by ContinuityService.telemetryState.collectAsState()
+    val sasCode by ContinuityService.sasCodeState.collectAsState()
 
     val isNotificationListenerEnabled = NotificationManagerCompat
         .getEnabledListenerPackages(context)
@@ -361,8 +364,9 @@ fun ContinuityApp(
                             )
                             Spacer(modifier = Modifier.width(6.dp))
                             Text(
-                                text = if (connectedPeers.isNotEmpty()) "Connected" else "Discovering",
+                                text = if (sasCode.isNotEmpty()) "SAS: $sasCode" else if (connectedPeers.isNotEmpty()) "Connected" else "Discovering",
                                 style = MaterialTheme.typography.labelSmall,
+                                fontWeight = FontWeight.Bold,
                                 color = if (connectedPeers.isNotEmpty())
                                     MaterialTheme.colorScheme.onPrimaryContainer
                                 else
@@ -572,6 +576,45 @@ fun ContinuityApp(
                             if (connectedPeers.isNotEmpty()) {
                                 Text("Active Encrypted Sessions:", style = MaterialTheme.typography.labelMedium)
                                 Spacer(modifier = Modifier.height(6.dp))
+
+                                if (sasCode.isNotEmpty()) {
+                                    Surface(
+                                        shape = RoundedCornerShape(12.dp),
+                                        color = Color(0x2210B981),
+                                        border = BorderStroke(1.dp, Color(0x6610B981)),
+                                        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)
+                                    ) {
+                                        Row(
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)
+                                        ) {
+                                            Icon(
+                                                Icons.Default.Security,
+                                                contentDescription = "Verified SAS",
+                                                tint = Color(0xFF10B981),
+                                                modifier = Modifier.size(20.dp)
+                                            )
+                                            Spacer(modifier = Modifier.width(10.dp))
+                                            Column {
+                                                Text(
+                                                    text = "Security Verification Code (SAS)",
+                                                    fontSize = 11.sp,
+                                                    fontWeight = FontWeight.Bold,
+                                                    color = Color(0xFF10B981)
+                                                )
+                                                Text(
+                                                    text = sasCode,
+                                                    fontSize = 16.sp,
+                                                    fontFamily = FontFamily.Monospace,
+                                                    fontWeight = FontWeight.ExtraBold,
+                                                    color = MaterialTheme.colorScheme.onSurface
+                                                )
+                                            }
+                                        }
+                                    }
+                                    Spacer(modifier = Modifier.height(4.dp))
+                                }
+
                                 for (peer in connectedPeers) {
                                     Surface(
                                         shape = RoundedCornerShape(12.dp),
