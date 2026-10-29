@@ -1,6 +1,8 @@
 package com.continuityhub.ui
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.Arrangement
@@ -26,7 +28,9 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.ElevatedCard
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -77,29 +81,37 @@ fun TrackpadScreen(
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
         // Status & Sensitivity header
-        Card(
+        ElevatedCard(
             modifier = Modifier.fillMaxWidth(),
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
-            shape = RoundedCornerShape(12.dp)
+            colors = CardDefaults.elevatedCardColors(containerColor = MaterialTheme.colorScheme.surface),
+            elevation = CardDefaults.elevatedCardElevation(defaultElevation = 2.dp),
+            shape = RoundedCornerShape(20.dp)
         ) {
-            Column(modifier = Modifier.padding(12.dp)) {
+            Column(modifier = Modifier.padding(16.dp)) {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(
-                            imageVector = Icons.Default.TouchApp,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.size(20.dp)
-                        )
-                        Spacer(modifier = Modifier.width(6.dp))
+                        Surface(
+                            shape = RoundedCornerShape(10.dp),
+                            color = MaterialTheme.colorScheme.primaryContainer,
+                            modifier = Modifier.size(32.dp)
+                        ) {
+                            Box(contentAlignment = Alignment.Center) {
+                                Icon(
+                                    imageVector = Icons.Default.TouchApp,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                            }
+                        }
+                        Spacer(modifier = Modifier.width(10.dp))
                         Text(
-                            text = "Hyprland Wayland Trackpad",
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 15.sp
+                            text = "Virtual Wayland Pointer",
+                            style = MaterialTheme.typography.titleMedium
                         )
                     }
 
@@ -107,10 +119,12 @@ fun TrackpadScreen(
                         Icon(
                             imageVector = Icons.Default.Keyboard,
                             contentDescription = "Toggle Keyboard",
-                            tint = if (showKeyboardInput) MaterialTheme.colorScheme.primary else Color.Gray
+                            tint = if (showKeyboardInput) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline
                         )
                     }
                 }
+
+                Spacer(modifier = Modifier.height(6.dp))
 
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
@@ -118,8 +132,8 @@ fun TrackpadScreen(
                 ) {
                     Text(
                         text = "Sensitivity: ${String.format("%.1f", sensitivity)}x",
-                        fontSize = 12.sp,
-                        modifier = Modifier.width(110.dp)
+                        style = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier.width(115.dp)
                     )
                     Slider(
                         value = sensitivity,
@@ -133,15 +147,16 @@ fun TrackpadScreen(
 
         // Live Text / Voice Input Field
         if (showKeyboardInput) {
-            Card(
+            ElevatedCard(
                 modifier = Modifier.fillMaxWidth(),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
-                shape = RoundedCornerShape(12.dp)
+                colors = CardDefaults.elevatedCardColors(containerColor = MaterialTheme.colorScheme.surface),
+                elevation = CardDefaults.elevatedCardElevation(defaultElevation = 2.dp),
+                shape = RoundedCornerShape(20.dp)
             ) {
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(8.dp),
+                        .padding(12.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     OutlinedTextField(
@@ -149,6 +164,7 @@ fun TrackpadScreen(
                         onValueChange = { textInput = it },
                         placeholder = { Text("Type text or dictate to desktop...") },
                         modifier = Modifier.weight(1f),
+                        shape = RoundedCornerShape(14.dp),
                         singleLine = true
                     )
                     Spacer(modifier = Modifier.width(8.dp))
@@ -160,7 +176,8 @@ fun TrackpadScreen(
                                 textInput = ""
                             }
                         },
-                        enabled = isConnected && textInput.isNotEmpty()
+                        enabled = isConnected && textInput.isNotEmpty(),
+                        shape = RoundedCornerShape(14.dp)
                     ) {
                         Icon(Icons.AutoMirrored.Filled.Send, contentDescription = "Send Text")
                     }
@@ -173,8 +190,9 @@ fun TrackpadScreen(
             modifier = Modifier
                 .weight(1f)
                 .fillMaxWidth()
-                .clip(RoundedCornerShape(16.dp))
-                .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f))
+                .clip(RoundedCornerShape(24.dp))
+                .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
+                .border(BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant), RoundedCornerShape(24.dp))
                 .pointerInput(sensitivity) {
                     awaitEachGesture {
                         val down = awaitFirstDown(requireUnconsumed = false)
@@ -277,8 +295,8 @@ fun TrackpadScreen(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(54.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                .height(56.dp),
+            horizontalArrangement = Arrangement.spacedBy(10.dp)
         ) {
             Button(
                 onClick = {
@@ -288,12 +306,12 @@ fun TrackpadScreen(
                 modifier = Modifier
                     .weight(1f)
                     .fillMaxSize(),
-                shape = RoundedCornerShape(12.dp)
+                shape = RoundedCornerShape(16.dp)
             ) {
-                Text("Left Click", fontWeight = FontWeight.Bold)
+                Text("Left Click", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold)
             }
 
-            Button(
+            FilledTonalButton(
                 onClick = {
                     haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                     sendMouseButton(MouseButtonEvent.Button.BUTTON_MIDDLE, MouseButtonEvent.State.STATE_CLICK)
@@ -301,10 +319,9 @@ fun TrackpadScreen(
                 modifier = Modifier
                     .weight(0.7f)
                     .fillMaxSize(),
-                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.secondary),
-                shape = RoundedCornerShape(12.dp)
+                shape = RoundedCornerShape(16.dp)
             ) {
-                Text("Middle", fontWeight = FontWeight.SemiBold)
+                Text("Middle", style = MaterialTheme.typography.labelMedium)
             }
 
             Button(
@@ -315,25 +332,26 @@ fun TrackpadScreen(
                 modifier = Modifier
                     .weight(1f)
                     .fillMaxSize(),
-                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.tertiary),
-                shape = RoundedCornerShape(12.dp)
+                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.secondary),
+                shape = RoundedCornerShape(16.dp)
             ) {
-                Text("Right Click", fontWeight = FontWeight.Bold)
+                Text("Right Click", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold)
             }
         }
 
         // Quick Desktop Shortcuts Row
         Surface(
             modifier = Modifier.fillMaxWidth(),
-            color = MaterialTheme.colorScheme.surfaceVariant,
-            shape = RoundedCornerShape(12.dp)
+            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+            shape = RoundedCornerShape(16.dp),
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
         ) {
             FlowRow(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(8.dp),
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
-                verticalArrangement = Arrangement.spacedBy(6.dp)
+                    .padding(10.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 ShortcutChip("Esc") { sendSpecialKey("Escape") }
                 ShortcutChip("Tab") { sendSpecialKey("Tab") }
@@ -362,15 +380,16 @@ fun ShortcutChip(label: String, onClick: () -> Unit) {
             haptic.performHapticFeedback(HapticFeedbackType.LongPress)
             onClick()
         },
-        shape = RoundedCornerShape(8.dp),
+        shape = RoundedCornerShape(12.dp),
         color = MaterialTheme.colorScheme.surface,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f)),
         shadowElevation = 1.dp
     ) {
         Text(
             text = label,
-            fontSize = 12.sp,
+            style = MaterialTheme.typography.labelMedium,
             fontWeight = FontWeight.Medium,
-            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp)
         )
     }
 }

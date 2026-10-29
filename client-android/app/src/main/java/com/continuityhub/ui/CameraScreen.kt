@@ -33,6 +33,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.ElevatedCard
 import androidx.compose.material3.FilledIconButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -40,6 +41,7 @@ import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Slider
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
@@ -76,14 +78,14 @@ fun CameraScreen(
         Card(
             modifier = Modifier.fillMaxWidth(),
             colors = CardDefaults.cardColors(containerColor = Color.Black),
-            shape = RoundedCornerShape(16.dp),
+            shape = RoundedCornerShape(24.dp),
             elevation = CardDefaults.cardElevation(defaultElevation = 4.dp)
         ) {
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
                     .aspectRatio(16f / 9f)
-                    .clip(RoundedCornerShape(16.dp)),
+                    .clip(RoundedCornerShape(24.dp)),
                 contentAlignment = Alignment.Center
             ) {
                 if (cameraState.previewBitmap != null && cameraState.isStreaming) {
@@ -167,10 +169,11 @@ fun CameraScreen(
         }
 
         // 2. Camera Controls Card
-        Card(
+        ElevatedCard(
             modifier = Modifier.fillMaxWidth(),
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
-            shape = RoundedCornerShape(16.dp)
+            colors = CardDefaults.elevatedCardColors(containerColor = MaterialTheme.colorScheme.surface),
+            shape = RoundedCornerShape(24.dp),
+            elevation = CardDefaults.elevatedCardElevation(defaultElevation = 2.dp)
         ) {
             Column(
                 modifier = Modifier
@@ -189,11 +192,11 @@ fun CameraScreen(
                     },
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(52.dp),
+                        .height(54.dp),
                     colors = ButtonDefaults.buttonColors(
                         containerColor = if (cameraState.isStreaming) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary
                     ),
-                    shape = RoundedCornerShape(12.dp)
+                    shape = RoundedCornerShape(16.dp)
                 ) {
                     Icon(
                         imageVector = if (cameraState.isStreaming) Icons.Default.Stop else Icons.Default.Videocam,
@@ -202,7 +205,7 @@ fun CameraScreen(
                     Spacer(modifier = Modifier.width(8.dp))
                     Text(
                         text = if (cameraState.isStreaming) "Stop Wireless Webcam" else "Start Wireless Webcam",
-                        fontSize = 16.sp,
+                        style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.Bold
                     )
                 }
@@ -215,7 +218,8 @@ fun CameraScreen(
                 ) {
                     // Switch Lens
                     OutlinedButton(
-                        onClick = { cameraManager?.toggleLens() }
+                        onClick = { cameraManager?.toggleLens() },
+                        shape = RoundedCornerShape(12.dp)
                     ) {
                         Icon(Icons.Default.FlipCameraAndroid, contentDescription = "Switch Lens")
                         Spacer(modifier = Modifier.width(6.dp))
@@ -225,7 +229,8 @@ fun CameraScreen(
                     // Torch Toggle
                     OutlinedButton(
                         onClick = { cameraManager?.toggleTorch() },
-                        enabled = cameraState.lens == CameraConfig.Lens.LENS_BACK
+                        enabled = cameraState.lens == CameraConfig.Lens.LENS_BACK,
+                        shape = RoundedCornerShape(12.dp)
                     ) {
                         Icon(
                             imageVector = if (cameraState.isTorchOn) Icons.Default.FlashOn else Icons.Default.FlashOff,
@@ -239,7 +244,8 @@ fun CameraScreen(
                     // Snapshot Shutter
                     FilledIconButton(
                         onClick = { cameraManager?.takeSnapshot() },
-                        enabled = cameraState.isStreaming
+                        enabled = cameraState.isStreaming,
+                        modifier = Modifier.size(48.dp)
                     ) {
                         Icon(Icons.Default.CameraAlt, contentDescription = "Snapshot")
                     }
@@ -251,10 +257,10 @@ fun CameraScreen(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween
                     ) {
-                        Text("Digital Zoom", fontSize = 13.sp, fontWeight = FontWeight.Medium)
+                        Text("Digital Zoom", style = MaterialTheme.typography.labelMedium)
                         Text(
                             text = String.format("%.1fx", cameraState.zoomRatio),
-                            fontSize = 13.sp,
+                            style = MaterialTheme.typography.labelLarge,
                             fontWeight = FontWeight.Bold,
                             color = MaterialTheme.colorScheme.primary
                         )
@@ -271,10 +277,11 @@ fun CameraScreen(
         }
 
         // 3. Desktop Screencopy Mirror Card
-        Card(
+        ElevatedCard(
             modifier = Modifier.fillMaxWidth(),
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
-            shape = RoundedCornerShape(16.dp)
+            colors = CardDefaults.elevatedCardColors(containerColor = MaterialTheme.colorScheme.surface),
+            shape = RoundedCornerShape(24.dp),
+            elevation = CardDefaults.elevatedCardElevation(defaultElevation = 2.dp)
         ) {
             Column(
                 modifier = Modifier
@@ -287,46 +294,54 @@ fun CameraScreen(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(
-                            imageVector = Icons.Default.Computer,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.primary
-                        )
-                        Spacer(modifier = Modifier.width(8.dp))
+                        Surface(
+                            shape = RoundedCornerShape(10.dp),
+                            color = MaterialTheme.colorScheme.tertiaryContainer,
+                            modifier = Modifier.size(32.dp)
+                        ) {
+                            Box(contentAlignment = Alignment.Center) {
+                                Icon(
+                                    imageVector = Icons.Default.Computer,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.onTertiaryContainer,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                            }
+                        }
+                        Spacer(modifier = Modifier.width(10.dp))
                         Text(
                             text = "Hyprland Desktop Mirror",
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 15.sp,
-                            color = MaterialTheme.colorScheme.primary
+                            style = MaterialTheme.typography.titleMedium
                         )
                     }
 
                     OutlinedButton(
                         onClick = { cameraManager?.requestDesktopScreen() },
-                        enabled = isConnected
+                        enabled = isConnected,
+                        shape = RoundedCornerShape(12.dp)
                     ) {
                         Icon(Icons.Default.Refresh, contentDescription = "Refresh", modifier = Modifier.size(16.dp))
                         Spacer(modifier = Modifier.width(4.dp))
-                        Text("Capture", fontSize = 12.sp)
+                        Text("Capture", style = MaterialTheme.typography.labelSmall)
                     }
                 }
 
                 Spacer(modifier = Modifier.height(8.dp))
                 Text(
-                    text = "View a live mirror of your Linux desktop screen right on your phone.",
-                    fontSize = 12.sp,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                    text = "View a live screencast of your Linux desktop right on your phone.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.outline
                 )
 
                 if (cameraState.desktopScreenBitmap != null) {
-                    Spacer(modifier = Modifier.height(12.dp))
+                    Spacer(modifier = Modifier.height(14.dp))
                     Image(
                         bitmap = cameraState.desktopScreenBitmap!!.asImageBitmap(),
                         contentDescription = "Desktop Screen Mirror",
                         modifier = Modifier
                             .fillMaxWidth()
                             .aspectRatio(16f / 10f)
-                            .clip(RoundedCornerShape(8.dp)),
+                            .clip(RoundedCornerShape(14.dp)),
                         contentScale = ContentScale.Fit
                     )
                 }
@@ -334,21 +349,22 @@ fun CameraScreen(
         }
 
         // 4. Linux Streaming Endpoint Info Card
-        Card(
+        ElevatedCard(
             modifier = Modifier.fillMaxWidth(),
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-            shape = RoundedCornerShape(16.dp)
+            colors = CardDefaults.elevatedCardColors(containerColor = MaterialTheme.colorScheme.surface),
+            shape = RoundedCornerShape(20.dp),
+            elevation = CardDefaults.elevatedCardElevation(defaultElevation = 1.dp)
         ) {
-            Column(modifier = Modifier.padding(16.dp)) {
+            Column(modifier = Modifier.padding(18.dp)) {
                 Text(
                     text = "Linux Virtual Webcam URL",
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 14.sp
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.Bold
                 )
                 Spacer(modifier = Modifier.height(4.dp))
                 Text(
                     text = "Use in OBS Studio, VLC, or browser as a video source:\nhttp://127.0.0.1:52802/live.mjpg",
-                    fontSize = 12.sp,
+                    style = MaterialTheme.typography.bodySmall,
                     fontFamily = FontFamily.Monospace,
                     color = MaterialTheme.colorScheme.primary
                 )

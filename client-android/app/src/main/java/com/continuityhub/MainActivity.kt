@@ -15,6 +15,12 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -48,10 +54,14 @@ import androidx.compose.material.icons.filled.TouchApp
 import androidx.compose.material.icons.filled.Upload
 import androidx.compose.material.icons.filled.UploadFile
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Badge
+import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.ElevatedCard
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
@@ -59,6 +69,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedCard
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
@@ -91,6 +102,7 @@ import com.continuityhub.model.FileTransferItem
 import com.continuityhub.model.MirroredNotificationItem
 import com.continuityhub.service.ContinuityService
 import com.continuityhub.ui.CameraScreen
+import com.continuityhub.ui.ContinuityHubTheme
 import com.continuityhub.ui.MediaScreen
 import com.continuityhub.ui.TrackpadScreen
 import java.io.File
@@ -147,7 +159,7 @@ class MainActivity : ComponentActivity() {
         handleShareIntent(intent)
 
         setContent {
-            MaterialTheme {
+            ContinuityHubTheme {
                 Surface(
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background
@@ -319,40 +331,65 @@ fun ContinuityApp(
                             3 -> "Continuity Camera"
                             else -> "Continuity Hub"
                         },
-                        fontWeight = FontWeight.Bold
+                        style = MaterialTheme.typography.titleLarge
                     )
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.primaryContainer,
-                    titleContentColor = MaterialTheme.colorScheme.onPrimaryContainer
+                    containerColor = MaterialTheme.colorScheme.surface,
+                    titleContentColor = MaterialTheme.colorScheme.onSurface
                 ),
                 actions = {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
+                    Surface(
+                        shape = RoundedCornerShape(16.dp),
+                        color = if (connectedPeers.isNotEmpty())
+                            MaterialTheme.colorScheme.primaryContainer
+                        else
+                            MaterialTheme.colorScheme.surfaceVariant,
                         modifier = Modifier.padding(end = 16.dp)
                     ) {
-                        Box(
-                            modifier = Modifier
-                                .size(10.dp)
-                                .background(
-                                    if (connectedPeers.isNotEmpty()) Color(0xFF4CAF50) else Color(0xFFFF9800),
-                                    shape = CircleShape
-                                )
-                        )
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text(
-                            text = if (connectedPeers.isNotEmpty()) "Connected" else "Discovering",
-                            fontSize = 13.sp,
-                            fontWeight = FontWeight.Medium
-                        )
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(8.dp)
+                                    .background(
+                                        if (connectedPeers.isNotEmpty()) Color(0xFF10B981) else Color(0xFFF59E0B),
+                                        shape = CircleShape
+                                    )
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = if (connectedPeers.isNotEmpty()) "Connected" else "Discovering",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = if (connectedPeers.isNotEmpty())
+                                    MaterialTheme.colorScheme.onPrimaryContainer
+                                else
+                                    MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
                     }
                 }
             )
         },
         bottomBar = {
-            NavigationBar {
+            NavigationBar(
+                containerColor = MaterialTheme.colorScheme.surface,
+                tonalElevation = 3.dp
+            ) {
                 NavigationBarItem(
-                    icon = { Icon(Icons.Default.Devices, contentDescription = "Hub") },
+                    icon = {
+                        BadgedBox(
+                            badge = {
+                                if (connectedPeers.isNotEmpty()) {
+                                    Badge(containerColor = MaterialTheme.colorScheme.primary)
+                                }
+                            }
+                        ) {
+                            Icon(Icons.Default.Devices, contentDescription = "Hub")
+                        }
+                    },
                     label = { Text("Hub") },
                     selected = selectedTab == 0,
                     onClick = { selectedTab = 0 }
@@ -378,26 +415,39 @@ fun ContinuityApp(
             }
         }
     ) { padding ->
-        when (selectedTab) {
-            1 -> {
-                TrackpadScreen(
-                    isConnected = connectedPeers.isNotEmpty(),
-                    modifier = Modifier.padding(padding)
-                )
+        AnimatedContent(
+            targetState = selectedTab,
+            label = "tabTransition",
+            transitionSpec = {
+                if (targetState > initialState) {
+                    (slideInHorizontally { width -> width / 4 } + fadeIn()) togetherWith
+                        (slideOutHorizontally { width -> -width / 4 } + fadeOut())
+                } else {
+                    (slideInHorizontally { width -> -width / 4 } + fadeIn()) togetherWith
+                        (slideOutHorizontally { width -> width / 4 } + fadeOut())
+                }
             }
-            2 -> {
-                MediaScreen(
-                    isConnected = connectedPeers.isNotEmpty(),
-                    modifier = Modifier.padding(padding)
-                )
-            }
-            3 -> {
-                CameraScreen(
-                    isConnected = connectedPeers.isNotEmpty(),
-                    modifier = Modifier.padding(padding)
-                )
-            }
-            else -> {
+        ) { tab ->
+            when (tab) {
+                1 -> {
+                    TrackpadScreen(
+                        isConnected = connectedPeers.isNotEmpty(),
+                        modifier = Modifier.padding(padding)
+                    )
+                }
+                2 -> {
+                    MediaScreen(
+                        isConnected = connectedPeers.isNotEmpty(),
+                        modifier = Modifier.padding(padding)
+                    )
+                }
+                3 -> {
+                    CameraScreen(
+                        isConnected = connectedPeers.isNotEmpty(),
+                        modifier = Modifier.padding(padding)
+                    )
+                }
+                else -> {
                 LazyColumn(
                     modifier = Modifier
                         .fillMaxSize()
@@ -407,37 +457,73 @@ fun ContinuityApp(
                 ) {
             // 1. Device Identity Card
             item {
-                Card(
+                ElevatedCard(
                     modifier = Modifier.fillMaxWidth(),
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
-                    shape = RoundedCornerShape(12.dp)
+                    shape = RoundedCornerShape(20.dp),
+                    colors = CardDefaults.elevatedCardColors(containerColor = MaterialTheme.colorScheme.surface),
+                    elevation = CardDefaults.elevatedCardElevation(defaultElevation = 2.dp)
                 ) {
-                    Column(modifier = Modifier.padding(16.dp)) {
-                        Text(
-                            text = "Local Device Identity",
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 16.sp,
-                            color = MaterialTheme.colorScheme.primary
-                        )
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Text("Device: ${deviceConfig?.deviceName ?: "Initializing..."}", fontWeight = FontWeight.Medium)
-                        Text("Port: ${deviceConfig?.port ?: 52801}", fontSize = 13.sp)
-                        Text("ID: ${deviceConfig?.deviceId ?: ""}", fontSize = 12.sp, color = Color.Gray)
-
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Text("TLS Certificate Fingerprint (SHA-256):", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                    Column(modifier = Modifier.padding(18.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Surface(
+                                shape = CircleShape,
+                                color = MaterialTheme.colorScheme.primaryContainer,
+                                modifier = Modifier.size(40.dp)
+                            ) {
+                                Box(contentAlignment = Alignment.Center) {
+                                    Icon(
+                                        Icons.Default.Devices,
+                                        contentDescription = null,
+                                        tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                                        modifier = Modifier.size(22.dp)
+                                    )
+                                }
+                            }
+                            Spacer(modifier = Modifier.width(12.dp))
+                            Column {
+                                Text(
+                                    text = "Local Device Identity",
+                                    style = MaterialTheme.typography.titleMedium,
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+                                Text(
+                                    text = deviceConfig?.deviceName ?: "Initializing...",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                            }
+                        }
+                        Spacer(modifier = Modifier.height(14.dp))
                         Row(
-                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Text("Port: ${deviceConfig?.port ?: 52801}", style = MaterialTheme.typography.bodyMedium)
+                            Text("ID: ${deviceConfig?.deviceId?.take(8) ?: ""}...", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline)
+                        }
+
+                        Spacer(modifier = Modifier.height(10.dp))
+                        Text("TLS Certificate Fingerprint (SHA-256):", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.SemiBold)
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Surface(
+                            shape = RoundedCornerShape(12.dp),
+                            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
                             modifier = Modifier.fillMaxWidth()
                         ) {
-                            Text(
-                                text = fingerprint,
-                                fontSize = 11.sp,
-                                fontFamily = FontFamily.Monospace,
-                                modifier = Modifier.weight(1f)
-                            )
-                            IconButton(onClick = { onCopyText(fingerprint) }) {
-                                Icon(Icons.Default.ContentCopy, contentDescription = "Copy Fingerprint")
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
+                            ) {
+                                Text(
+                                    text = fingerprint,
+                                    fontSize = 11.sp,
+                                    fontFamily = FontFamily.Monospace,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.weight(1f)
+                                )
+                                IconButton(onClick = { onCopyText(fingerprint) }, modifier = Modifier.size(32.dp)) {
+                                    Icon(Icons.Default.ContentCopy, contentDescription = "Copy Fingerprint", modifier = Modifier.size(16.dp))
+                                }
                             }
                         }
                     }
@@ -446,96 +532,127 @@ fun ContinuityApp(
 
             // 2. Peer Connections Card
             item {
-                Card(
+                ElevatedCard(
                     modifier = Modifier.fillMaxWidth(),
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
-                    shape = RoundedCornerShape(12.dp)
+                    shape = RoundedCornerShape(20.dp),
+                    colors = CardDefaults.elevatedCardColors(containerColor = MaterialTheme.colorScheme.surface),
+                    elevation = CardDefaults.elevatedCardElevation(defaultElevation = 2.dp)
                 ) {
-                    Column(modifier = Modifier.padding(16.dp)) {
+                    Column(modifier = Modifier.padding(18.dp)) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(Icons.Default.Devices, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
-                            Spacer(modifier = Modifier.width(8.dp))
+                            Surface(
+                                shape = CircleShape,
+                                color = MaterialTheme.colorScheme.secondaryContainer,
+                                modifier = Modifier.size(40.dp)
+                            ) {
+                                Box(contentAlignment = Alignment.Center) {
+                                    Icon(
+                                        Icons.Default.Sync,
+                                        contentDescription = null,
+                                        tint = MaterialTheme.colorScheme.onSecondaryContainer,
+                                        modifier = Modifier.size(22.dp)
+                                    )
+                                }
+                            }
+                            Spacer(modifier = Modifier.width(12.dp))
                             Text(
                                 text = "LAN Peers & mTLS Status",
-                                fontWeight = FontWeight.Bold,
-                                fontSize = 16.sp
+                                style = MaterialTheme.typography.titleMedium
                             )
                         }
-                        Spacer(modifier = Modifier.height(8.dp))
+                        Spacer(modifier = Modifier.height(14.dp))
 
                         if (connectedPeers.isEmpty() && discoveredPeers.isEmpty()) {
                             Text(
                                 "Scanning network via mDNS (_continuity._tcp.local)...",
-                                fontSize = 13.sp,
-                                color = Color.Gray
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.outline
                             )
                         } else {
                             if (connectedPeers.isNotEmpty()) {
-                                Text("Active Encrypted Sessions:", fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+                                Text("Active Encrypted Sessions:", style = MaterialTheme.typography.labelMedium)
+                                Spacer(modifier = Modifier.height(6.dp))
                                 for (peer in connectedPeers) {
-                                    Row(
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        modifier = Modifier.padding(vertical = 4.dp)
+                                    Surface(
+                                        shape = RoundedCornerShape(12.dp),
+                                        color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.35f),
+                                        modifier = Modifier.fillMaxWidth().padding(vertical = 3.dp)
                                     ) {
-                                        Icon(
-                                            Icons.Default.CheckCircle,
-                                            contentDescription = null,
-                                            tint = Color(0xFF4CAF50),
-                                            modifier = Modifier.size(16.dp)
-                                        )
-                                        Spacer(modifier = Modifier.width(6.dp))
-                                        Text(peer, fontSize = 13.sp)
+                                        Row(
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)
+                                        ) {
+                                            Icon(
+                                                Icons.Default.CheckCircle,
+                                                contentDescription = null,
+                                                tint = Color(0xFF10B981),
+                                                modifier = Modifier.size(16.dp)
+                                            )
+                                            Spacer(modifier = Modifier.width(8.dp))
+                                            Text(peer, style = MaterialTheme.typography.bodyMedium)
+                                        }
                                     }
                                 }
                                 Spacer(modifier = Modifier.height(8.dp))
                             }
 
                             if (discoveredPeers.isNotEmpty()) {
-                                Text("Discovered Peers:", fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+                                Text("Discovered Peers:", style = MaterialTheme.typography.labelMedium)
                                 for (peer in discoveredPeers) {
                                     Text(
                                         "• ${peer.deviceName} (${peer.host}:${peer.port})",
-                                        fontSize = 13.sp
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
                                     )
                                 }
                             }
                         }
 
-                        Spacer(modifier = Modifier.height(10.dp))
-                        OutlinedButton(
+                        Spacer(modifier = Modifier.height(12.dp))
+                        FilledTonalButton(
                             onClick = { showDirectConnectDialog = true },
+                            shape = RoundedCornerShape(14.dp),
                             modifier = Modifier.fillMaxWidth()
                         ) {
-                            Icon(Icons.Default.Sync, contentDescription = null, modifier = Modifier.size(16.dp))
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text("Connect to IP Directly (USB / Manual)", fontSize = 12.sp)
+                            Icon(Icons.Default.Sync, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("Connect to IP Directly (USB / Manual)")
                         }
                     }
                 }
             }
 
-            // 3. Telemetry & Cellular Status Card (Phase 5)
+            // 3. Telemetry & Cellular Status Card
             item {
-                Card(
+                ElevatedCard(
                     modifier = Modifier.fillMaxWidth(),
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
-                    shape = RoundedCornerShape(12.dp)
+                    shape = RoundedCornerShape(20.dp),
+                    colors = CardDefaults.elevatedCardColors(containerColor = MaterialTheme.colorScheme.surface),
+                    elevation = CardDefaults.elevatedCardElevation(defaultElevation = 2.dp)
                 ) {
-                    Column(modifier = Modifier.padding(16.dp)) {
+                    Column(modifier = Modifier.padding(18.dp)) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(
-                                Icons.Default.BatteryChargingFull,
-                                contentDescription = null,
-                                tint = MaterialTheme.colorScheme.primary
-                            )
-                            Spacer(modifier = Modifier.width(8.dp))
+                            Surface(
+                                shape = CircleShape,
+                                color = MaterialTheme.colorScheme.tertiaryContainer,
+                                modifier = Modifier.size(40.dp)
+                            ) {
+                                Box(contentAlignment = Alignment.Center) {
+                                    Icon(
+                                        Icons.Default.BatteryChargingFull,
+                                        contentDescription = null,
+                                        tint = MaterialTheme.colorScheme.onTertiaryContainer,
+                                        modifier = Modifier.size(22.dp)
+                                    )
+                                }
+                            }
+                            Spacer(modifier = Modifier.width(12.dp))
                             Text(
-                                text = "Device Health & Cellular Continuity",
-                                fontWeight = FontWeight.Bold,
-                                fontSize = 16.sp
+                                text = "Device Health & Telemetry",
+                                style = MaterialTheme.typography.titleMedium
                             )
                         }
-                        Spacer(modifier = Modifier.height(10.dp))
+                        Spacer(modifier = Modifier.height(14.dp))
 
                         val batteryPct = telemetry?.batteryPercentage ?: 85
                         val isCharging = telemetry?.isCharging ?: false
@@ -551,48 +668,50 @@ fun ContinuityApp(
                             Column {
                                 Text(
                                     text = "Battery: $batteryPct% ${if (isCharging) "⚡ Charging" else "Discharging"}",
-                                    fontWeight = FontWeight.SemiBold,
-                                    fontSize = 14.sp
+                                    style = MaterialTheme.typography.titleSmall
                                 )
                                 Text(
                                     text = "Temp: ${String.format("%.1f", temp)}°C  •  Wi-Fi: $wifi  •  Carrier: $carrier",
-                                    fontSize = 12.sp,
-                                    color = Color.Gray
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.outline
                                 )
                             }
                         }
 
-                        Spacer(modifier = Modifier.height(12.dp))
+                        Spacer(modifier = Modifier.height(14.dp))
 
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
-                            OutlinedButton(
+                            FilledTonalButton(
                                 onClick = onTestCallAlert,
+                                shape = RoundedCornerShape(12.dp),
                                 modifier = Modifier.weight(1f)
                             ) {
                                 Icon(Icons.Default.Call, contentDescription = null, modifier = Modifier.size(16.dp))
-                                Spacer(modifier = Modifier.width(4.dp))
-                                Text("Test Call", fontSize = 12.sp)
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Test Call")
                             }
 
-                            OutlinedButton(
+                            FilledTonalButton(
                                 onClick = onTestSmsAlert,
+                                shape = RoundedCornerShape(12.dp),
                                 modifier = Modifier.weight(1f)
                             ) {
                                 Icon(Icons.AutoMirrored.Filled.Message, contentDescription = null, modifier = Modifier.size(16.dp))
-                                Spacer(modifier = Modifier.width(4.dp))
-                                Text("Test SMS", fontSize = 12.sp)
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Test SMS")
                             }
                         }
 
-                        Spacer(modifier = Modifier.height(6.dp))
-                        Button(
+                        Spacer(modifier = Modifier.height(8.dp))
+                        OutlinedButton(
                             onClick = onRequestTelephonyPermissions,
+                            shape = RoundedCornerShape(12.dp),
                             modifier = Modifier.fillMaxWidth()
                         ) {
-                            Text("Grant Phone & SMS Permissions", fontSize = 13.sp)
+                            Text("Grant Phone & SMS Permissions")
                         }
                     }
                 }
@@ -600,79 +719,105 @@ fun ContinuityApp(
 
             // 4. Notification Mirroring Status Card
             item {
-                Card(
+                ElevatedCard(
                     modifier = Modifier.fillMaxWidth(),
-                    colors = CardDefaults.cardColors(
+                    shape = RoundedCornerShape(20.dp),
+                    colors = CardDefaults.elevatedCardColors(
                         containerColor = if (isNotificationListenerEnabled)
-                            MaterialTheme.colorScheme.surfaceVariant
+                            MaterialTheme.colorScheme.surface
                         else
-                            Color(0xFFFFF3E0)
+                            MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.35f)
                     ),
-                    shape = RoundedCornerShape(12.dp)
+                    elevation = CardDefaults.elevatedCardElevation(defaultElevation = 2.dp)
                 ) {
-                    Column(modifier = Modifier.padding(16.dp)) {
+                    Column(modifier = Modifier.padding(18.dp)) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(
-                                imageVector = if (isNotificationListenerEnabled) Icons.Default.NotificationsActive else Icons.Default.Notifications,
-                                contentDescription = null,
-                                tint = if (isNotificationListenerEnabled) Color(0xFF4CAF50) else Color(0xFFFF9800)
-                            )
-                            Spacer(modifier = Modifier.width(8.dp))
+                            Surface(
+                                shape = CircleShape,
+                                color = if (isNotificationListenerEnabled)
+                                    MaterialTheme.colorScheme.primaryContainer
+                                else
+                                    MaterialTheme.colorScheme.errorContainer,
+                                modifier = Modifier.size(40.dp)
+                            ) {
+                                Box(contentAlignment = Alignment.Center) {
+                                    Icon(
+                                        imageVector = if (isNotificationListenerEnabled) Icons.Default.NotificationsActive else Icons.Default.Notifications,
+                                        contentDescription = null,
+                                        tint = if (isNotificationListenerEnabled)
+                                            MaterialTheme.colorScheme.onPrimaryContainer
+                                        else
+                                            MaterialTheme.colorScheme.onErrorContainer,
+                                        modifier = Modifier.size(22.dp)
+                                    )
+                                }
+                            }
+                            Spacer(modifier = Modifier.width(12.dp))
                             Text(
                                 text = "Notification Mirroring",
-                                fontWeight = FontWeight.Bold,
-                                fontSize = 16.sp
+                                style = MaterialTheme.typography.titleMedium
                             )
                         }
-                        Spacer(modifier = Modifier.height(6.dp))
+                        Spacer(modifier = Modifier.height(10.dp))
                         Text(
                             text = if (isNotificationListenerEnabled)
-                                "Notification mirroring is active. Phone notifications are mirrored to desktop with quick actions."
+                                "Phone notifications are mirrored seamlessly to desktop with quick replies & actions."
                             else
                                 "Notification access permission required to mirror notifications to desktop.",
-                            fontSize = 13.sp,
-                            color = if (isNotificationListenerEnabled) Color.Unspecified else Color(0xFFE65100)
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = if (isNotificationListenerEnabled)
+                                MaterialTheme.colorScheme.onSurfaceVariant
+                            else
+                                MaterialTheme.colorScheme.error
                         )
-                        Spacer(modifier = Modifier.height(10.dp))
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            if (!isNotificationListenerEnabled) {
-                                Button(onClick = onOpenNotificationSettings) {
-                                    Text("Grant Notification Access")
-                                }
-                            } else {
-                                OutlinedButton(onClick = onSendTestAlert) {
-                                    Text("Send Test Alert to Desktop")
-                                }
+                        Spacer(modifier = Modifier.height(12.dp))
+                        if (!isNotificationListenerEnabled) {
+                            Button(
+                                onClick = onOpenNotificationSettings,
+                                shape = RoundedCornerShape(12.dp),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Text("Grant Notification Access")
+                            }
+                        } else {
+                            OutlinedButton(
+                                onClick = onSendTestAlert,
+                                shape = RoundedCornerShape(12.dp),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Text("Send Test Alert to Desktop")
                             }
                         }
                     }
                 }
             }
 
-            // 4. Actions: File Drop & Test Sync
+            // 5. Actions: File Drop & Test Sync
             item {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
                     Button(
                         onClick = { filePickerLauncher.launch("*/*") },
+                        shape = RoundedCornerShape(16.dp),
                         modifier = Modifier.weight(1f)
                     ) {
-                        Icon(Icons.Default.UploadFile, contentDescription = null)
-                        Spacer(modifier = Modifier.width(6.dp))
+                        Icon(Icons.Default.UploadFile, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(modifier = Modifier.width(8.dp))
                         Text("Send File Drop")
                     }
 
-                    OutlinedButton(
+                    FilledTonalButton(
                         onClick = {
                             val testText = "Continuity Test: " + SimpleDateFormat("HH:mm:ss", Locale.US).format(Date())
                             onCopyText(testText)
                         },
+                        shape = RoundedCornerShape(16.dp),
                         modifier = Modifier.weight(1f)
                     ) {
-                        Icon(Icons.Default.Sync, contentDescription = null)
-                        Spacer(modifier = Modifier.width(6.dp))
+                        Icon(Icons.Default.Sync, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(modifier = Modifier.width(8.dp))
                         Text("Test Clipboard")
                     }
                 }
@@ -737,6 +882,7 @@ fun ContinuityApp(
         }
             }
         }
+        }
     }
 
     if (showDirectConnectDialog) {
@@ -786,63 +932,69 @@ fun ContinuityApp(
 fun NotificationCard(item: MirroredNotificationItem) {
     val timeStr = SimpleDateFormat("HH:mm:ss", Locale.US).format(Date(item.timestamp))
 
-    Card(
+    OutlinedCard(
         modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(8.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.outlinedCardColors(containerColor = MaterialTheme.colorScheme.surface)
     ) {
-        Column(modifier = Modifier.padding(12.dp)) {
+        Column(modifier = Modifier.padding(14.dp)) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
                 Text(
                     text = "[${item.appName}] ${item.title}",
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 13.sp,
+                    style = MaterialTheme.typography.titleSmall,
                     color = MaterialTheme.colorScheme.primary
                 )
                 Text(
                     text = timeStr,
-                    fontSize = 11.sp,
-                    color = Color.Gray
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.outline
                 )
             }
-            Spacer(modifier = Modifier.height(4.dp))
-            Text(text = item.body, fontSize = 13.sp)
+            Spacer(modifier = Modifier.height(6.dp))
+            Text(text = item.body, style = MaterialTheme.typography.bodyMedium)
         }
     }
 }
 
 @Composable
 fun FileTransferCard(item: FileTransferItem, onOpenFile: (String) -> Unit) {
-    Card(
+    OutlinedCard(
         modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(10.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.outlinedCardColors(containerColor = MaterialTheme.colorScheme.surface)
     ) {
-        Column(modifier = Modifier.padding(14.dp)) {
+        Column(modifier = Modifier.padding(16.dp)) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Icon(
-                    imageVector = if (item.isIncoming) Icons.Default.Download else Icons.Default.Upload,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.size(24.dp)
-                )
-                Spacer(modifier = Modifier.width(10.dp))
+                Surface(
+                    shape = CircleShape,
+                    color = MaterialTheme.colorScheme.primaryContainer,
+                    modifier = Modifier.size(40.dp)
+                ) {
+                    Box(contentAlignment = Alignment.Center) {
+                        Icon(
+                            imageVector = if (item.isIncoming) Icons.Default.Download else Icons.Default.Upload,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
+                }
+                Spacer(modifier = Modifier.width(12.dp))
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
                         text = item.fileName,
-                        fontWeight = FontWeight.SemiBold,
-                        fontSize = 14.sp
+                        style = MaterialTheme.typography.titleSmall
                     )
                     Text(
                         text = if (item.isIncoming) "From: ${item.peerName}" else "To: ${item.peerName}",
-                        fontSize = 12.sp,
-                        color = Color.Gray
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.outline
                     )
                 }
 
@@ -852,23 +1004,23 @@ fun FileTransferCard(item: FileTransferItem, onOpenFile: (String) -> Unit) {
                             Icon(Icons.AutoMirrored.Filled.OpenInNew, contentDescription = "Open File", tint = MaterialTheme.colorScheme.primary)
                         }
                     } else {
-                        Icon(Icons.Default.CheckCircle, contentDescription = null, tint = Color(0xFF4CAF50))
+                        Icon(Icons.Default.CheckCircle, contentDescription = null, tint = Color(0xFF10B981))
                     }
                 } else if (item.isFailed) {
-                    Icon(Icons.Default.Error, contentDescription = null, tint = Color.Red)
+                    Icon(Icons.Default.Error, contentDescription = null, tint = MaterialTheme.colorScheme.error)
                 }
             }
 
-            Spacer(modifier = Modifier.height(8.dp))
+            Spacer(modifier = Modifier.height(10.dp))
 
             if (!item.isCompleted && !item.isFailed) {
                 LinearProgressIndicator(
                     progress = { item.progressPercentage },
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(6.dp),
+                        .height(8.dp),
                 )
-                Spacer(modifier = Modifier.height(4.dp))
+                Spacer(modifier = Modifier.height(6.dp))
             }
 
             Row(
@@ -877,8 +1029,8 @@ fun FileTransferCard(item: FileTransferItem, onOpenFile: (String) -> Unit) {
             ) {
                 Text(
                     text = item.formattedProgress,
-                    fontSize = 11.sp,
-                    color = Color.Gray
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.outline
                 )
                 Text(
                     text = when {
@@ -886,11 +1038,11 @@ fun FileTransferCard(item: FileTransferItem, onOpenFile: (String) -> Unit) {
                         item.isFailed -> item.errorMessage ?: "Failed"
                         else -> "${(item.progressPercentage * 100).toInt()}%"
                     },
-                    fontSize = 11.sp,
+                    style = MaterialTheme.typography.labelSmall,
                     fontWeight = FontWeight.Medium,
                     color = when {
-                        item.isCompleted -> Color(0xFF4CAF50)
-                        item.isFailed -> Color.Red
+                        item.isCompleted -> Color(0xFF10B981)
+                        item.isFailed -> MaterialTheme.colorScheme.error
                         else -> MaterialTheme.colorScheme.primary
                     }
                 )
@@ -903,34 +1055,34 @@ fun FileTransferCard(item: FileTransferItem, onOpenFile: (String) -> Unit) {
 fun ClipboardLogItem(log: ClipboardLog, onCopyText: (String) -> Unit) {
     val timeStr = SimpleDateFormat("HH:mm:ss", Locale.US).format(Date(log.timestamp))
 
-    Card(
+    OutlinedCard(
         modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(8.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.outlinedCardColors(containerColor = MaterialTheme.colorScheme.surface)
     ) {
-        Column(modifier = Modifier.padding(12.dp)) {
+        Column(modifier = Modifier.padding(14.dp)) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
                 Text(
                     text = log.source,
+                    style = MaterialTheme.typography.labelMedium,
                     fontWeight = FontWeight.Bold,
-                    fontSize = 13.sp,
                     color = MaterialTheme.colorScheme.primary
                 )
                 Text(
                     text = timeStr,
-                    fontSize = 11.sp,
-                    color = Color.Gray
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.outline
                 )
             }
-            Spacer(modifier = Modifier.height(4.dp))
+            Spacer(modifier = Modifier.height(6.dp))
             Text(
                 text = log.preview,
-                fontSize = 14.sp
+                style = MaterialTheme.typography.bodyMedium
             )
-            Spacer(modifier = Modifier.height(4.dp))
+            Spacer(modifier = Modifier.height(6.dp))
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -938,14 +1090,14 @@ fun ClipboardLogItem(log: ClipboardLog, onCopyText: (String) -> Unit) {
             ) {
                 Text(
                     text = "SHA-256: ${log.hash.take(16)}...",
-                    fontSize = 10.sp,
+                    style = MaterialTheme.typography.labelSmall,
                     fontFamily = FontFamily.Monospace,
-                    color = Color.Gray,
+                    color = MaterialTheme.colorScheme.outline,
                     modifier = Modifier.weight(1f)
                 )
                 IconButton(
                     onClick = { onCopyText(log.preview) },
-                    modifier = Modifier.size(24.dp)
+                    modifier = Modifier.size(28.dp)
                 ) {
                     Icon(
                         Icons.Default.ContentCopy,
