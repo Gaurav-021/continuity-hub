@@ -24,18 +24,21 @@ pub struct CameraStatus {
     pub fps: u32,
     pub torch: bool,
     pub zoom: f32,
+    pub rotation: u32,
 }
 
 pub struct CameraManager {
     my_device_id: String,
     http_port: u16,
     is_streaming: Arc<AtomicBool>,
+    is_desktop_streaming: Arc<AtomicBool>,
     latest_frame: Arc<RwLock<Option<CameraFrame>>>,
     active_peer_tx: Arc<RwLock<Option<mpsc::Sender<Packet>>>>,
     frame_tx: broadcast::Sender<Vec<u8>>,
     fps_counter: Arc<AtomicU32>,
     current_fps: Arc<AtomicU32>,
     current_lens: Arc<RwLock<String>>,
+    current_rotation: Arc<AtomicU32>,
     current_width: Arc<RwLock<u32>>,
     current_height: Arc<RwLock<u32>>,
     snapshot_path: PathBuf,
@@ -54,12 +57,14 @@ impl CameraManager {
             my_device_id,
             http_port,
             is_streaming: Arc::new(AtomicBool::new(false)),
+            is_desktop_streaming: Arc::new(AtomicBool::new(false)),
             latest_frame: Arc::new(RwLock::new(None)),
             active_peer_tx: Arc::new(RwLock::new(None)),
             frame_tx,
             fps_counter: Arc::new(AtomicU32::new(0)),
             current_fps: Arc::new(AtomicU32::new(0)),
             current_lens: Arc::new(RwLock::new("Back".to_string())),
+            current_rotation: Arc::new(AtomicU32::new(0)),
             current_width: Arc::new(RwLock::new(1920)),
             current_height: Arc::new(RwLock::new(1080)),
             snapshot_path,
@@ -172,6 +177,7 @@ impl CameraManager {
                             "fps": status.fps,
                             "torch": status.torch,
                             "zoom": status.zoom,
+                            "rotation": status.rotation,
                             "mjpeg_url": format!("http://127.0.0.1:{}/live.mjpg", manager.http_port),
                             "snapshot_url": format!("http://127.0.0.1:{}/snapshot.jpg", manager.http_port),
                         });
@@ -247,6 +253,7 @@ impl CameraManager {
             fps: self.current_fps.load(Ordering::Relaxed),
             torch: false,
             zoom: 1.0,
+            rotation: self.current_rotation.load(Ordering::Relaxed),
         }
     }
 
@@ -307,6 +314,7 @@ impl CameraManager {
         *self.current_width.write().await = config.width;
         *self.current_height.write().await = config.height;
         *self.current_lens.write().await = lens_str.to_string();
+        self.current_rotation.store(config.rotation_degrees, Ordering::Relaxed);
     }
 
     async fn handle_camera_snapshot(&self, snapshot: CameraSnapshot, peer_name: &str) {
@@ -328,30 +336,101 @@ impl CameraManager {
         let action = control.action();
         debug!("Received camera control command: {:?}", action);
 
-        if action == CameraAction::RequestDesktopScreen {
-            // Capture desktop output via grim and return DesktopScreenFrame
-            if let Some(jpeg_bytes) = self.capture_desktop_screen().await {
-                let screen_frame = DesktopScreenFrame {
-                    timestamp_ms: chrono::Utc::now().timestamp_millis() as u64,
-                    width: 1920,
-                    height: 1080,
-                    image_bytes: jpeg_bytes,
-                };
+        match action {
+            CameraAction::RequestDesktopScreen => {
+                // Capture desktop output via grim and return DesktopScreenFrame
+                if let Some(jpeg_bytes) = self.capture_desktop_screen().await {
+                    let screen_frame = DesktopScreenFrame {
+                        timestamp_ms: chrono::Utc::now().timestamp_millis() as u64,
+                        width: 1920,
+                        height: 1080,
+                        image_bytes: jpeg_bytes,
+                    };
 
-                let reply_msg = CameraMessage {
-                    msg: Some(Msg::DesktopScreen(screen_frame)),
-                };
+                    let reply_msg = CameraMessage {
+                        msg: Some(Msg::DesktopScreen(screen_frame)),
+                    };
 
-                let mut bytes = Vec::new();
-                reply_msg.encode(&mut bytes).ok()?;
+                    let mut bytes = Vec::new();
+                    reply_msg.encode(&mut bytes).ok()?;
 
-                return Some(Packet {
-                    session_id: self.my_device_id.clone(),
-                    sequence_number: 1,
-                    channel: Channel::Camera as i32,
-                    payload: bytes,
+                    return Some(Packet {
+                        session_id: self.my_device_id.clone(),
+                        sequence_number: 1,
+                        channel: Channel::Camera as i32,
+                        payload: bytes,
+                    });
+                }
+            }
+            CameraAction::StartDesktopStream => {
+                info!("Starting continuous Hyprland desktop screencast stream...");
+                self.is_desktop_streaming.store(true, Ordering::Relaxed);
+                let is_streaming = Arc::clone(&self.is_desktop_streaming);
+                let peer_tx_arc = Arc::clone(&self.active_peer_tx);
+                let my_device_id = self.my_device_id.clone();
+
+                tokio::spawn(async move {
+                    // ~15 FPS stream interval (66ms) with low overhead
+                    let mut interval = tokio::time::interval(tokio::time::Duration::from_millis(66));
+                    interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+
+                    while is_streaming.load(Ordering::Relaxed) {
+                        interval.tick().await;
+
+                        #[cfg(target_os = "linux")]
+                        {
+                            let output = tokio::process::Command::new("grim")
+                                .args(["-t", "jpeg", "-q", "50", "-"])
+                                .output()
+                                .await;
+
+                            if let Ok(out) = output {
+                                if out.status.success() && !out.stdout.is_empty() {
+                                    let screen_frame = DesktopScreenFrame {
+                                        timestamp_ms: chrono::Utc::now().timestamp_millis() as u64,
+                                        width: 1920,
+                                        height: 1080,
+                                        image_bytes: out.stdout,
+                                    };
+
+                                    let reply_msg = CameraMessage {
+                                        msg: Some(Msg::DesktopScreen(screen_frame)),
+                                    };
+
+                                    let mut bytes = Vec::new();
+                                    if reply_msg.encode(&mut bytes).is_ok() {
+                                        let packet = Packet {
+                                            session_id: my_device_id.clone(),
+                                            sequence_number: 1,
+                                            channel: Channel::Camera as i32,
+                                            payload: bytes,
+                                        };
+
+                                        let guard = peer_tx_arc.read().await;
+                                        if let Some(ref tx) = *guard {
+                                            if tx.send(packet).await.is_err() {
+                                                break;
+                                            }
+                                        } else {
+                                            break;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    info!("Hyprland desktop screencast stream finished");
                 });
             }
+            CameraAction::StopDesktopStream => {
+                info!("Stopping continuous Hyprland desktop screencast stream");
+                self.is_desktop_streaming.store(false, Ordering::Relaxed);
+            }
+            CameraAction::SetRotation => {
+                info!("Updated camera stream rotation to {}°", control.rotation_degrees);
+                self.current_rotation.store(control.rotation_degrees, Ordering::Relaxed);
+            }
+            _ => {}
         }
 
         None
@@ -362,7 +441,7 @@ impl CameraManager {
         #[cfg(target_os = "linux")]
         {
             let output = tokio::process::Command::new("grim")
-                .args(["-t", "jpeg", "-q", "65", "-"])
+                .args(["-t", "jpeg", "-q", "55", "-"])
                 .output()
                 .await;
 
@@ -395,6 +474,7 @@ impl CameraManager {
             zoom_ratio,
             width: 1920,
             height: 1080,
+            rotation_degrees: self.current_rotation.load(Ordering::Relaxed),
         };
 
         let msg = CameraMessage {

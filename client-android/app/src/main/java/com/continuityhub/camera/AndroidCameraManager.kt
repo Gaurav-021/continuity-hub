@@ -41,9 +41,11 @@ data class CameraUiState(
     val fps: Int = 0,
     val isTorchOn: Boolean = false,
     val zoomRatio: Float = 1.0f,
+    val rotationDegrees: Int = 0,
     val previewBitmap: Bitmap? = null,
     val desktopScreenBitmap: Bitmap? = null,
-    val isDesktopMirroring: Boolean = false
+    val isDesktopMirroring: Boolean = false,
+    val isDesktopStreaming: Boolean = false
 )
 
 class AndroidCameraManager(private val context: Context) {
@@ -65,6 +67,7 @@ class AndroidCameraManager(private val context: Context) {
     @Volatile
     private var latestFrameBytes: ByteArray? = null
 
+    private var userRotationDegrees = 0
     private val frameIndex = AtomicLong(0)
     private var frameCounter = 0
     private var lastFpsTimestamp = System.currentTimeMillis()
@@ -206,13 +209,14 @@ class AndroidCameraManager(private val context: Context) {
                 .setFormat(CameraConfig.VideoFormat.FORMAT_MJPEG)
                 .setTorchEnabled(_uiState.value.isTorchOn)
                 .setZoomRatio(_uiState.value.zoomRatio)
+                .setRotationDegrees(userRotationDegrees)
                 .build()
 
             ContinuityService.broadcastCameraMessage(
                 CameraMessage.newBuilder().setConfig(configMsg).build()
             )
 
-            Log.i(tag, "Camera streaming started: ${finalWidth}x$finalHeight, lens: $lens")
+            Log.i(tag, "Camera streaming started: ${finalWidth}x$finalHeight, lens: $lens, rotation: $userRotationDegrees°")
         } catch (e: Exception) {
             Log.e(tag, "Failed to start camera streaming: ${e.message}", e)
             _uiState.value = _uiState.value.copy(isStreaming = false)
@@ -229,6 +233,22 @@ class AndroidCameraManager(private val context: Context) {
 
         // Optimized JPEG compression quality (80% reduces Wi-Fi frame payload by ~65% with crisp quality)
         requestBuilder.set(CaptureRequest.JPEG_QUALITY, 80.toByte())
+
+        // Calculate sensor + user orientation for hardware JPEG encoding
+        try {
+            val characteristics = cameraManager.getCameraCharacteristics(camera.id)
+            val sensorOrientation = characteristics.get(CameraCharacteristics.SENSOR_ORIENTATION) ?: 0
+            val facing = characteristics.get(CameraCharacteristics.LENS_FACING)
+
+            val jpegOrientation = if (facing == CameraCharacteristics.LENS_FACING_FRONT) {
+                (sensorOrientation - userRotationDegrees + 360) % 360
+            } else {
+                (sensorOrientation + userRotationDegrees) % 360
+            }
+            requestBuilder.set(CaptureRequest.JPEG_ORIENTATION, jpegOrientation)
+        } catch (e: Exception) {
+            Log.w(tag, "Could not set JPEG_ORIENTATION: ${e.message}")
+        }
 
         // Torch
         if (_uiState.value.isTorchOn) {
@@ -296,6 +316,38 @@ class AndroidCameraManager(private val context: Context) {
         _uiState.value = _uiState.value.copy(lens = newLens, isTorchOn = false)
         if (_uiState.value.isStreaming) {
             startStreaming(newLens, _uiState.value.width, _uiState.value.height)
+        }
+    }
+
+    fun rotateCamera(degrees: Int = 90) {
+        userRotationDegrees = (userRotationDegrees + degrees) % 360
+        _uiState.value = _uiState.value.copy(rotationDegrees = userRotationDegrees)
+        updateCaptureSessionOrientation()
+
+        scope.launch {
+            val cmd = CameraControlCommand.newBuilder()
+                .setAction(CameraControlCommand.Action.ACTION_SET_ROTATION)
+                .setRotationDegrees(userRotationDegrees)
+                .build()
+
+            ContinuityService.broadcastCameraMessage(
+                CameraMessage.newBuilder().setControl(cmd).build()
+            )
+            Log.i(tag, "Rotated camera to $userRotationDegrees°")
+        }
+    }
+
+    private fun updateCaptureSessionOrientation() {
+        val session = captureSession ?: return
+        val camera = cameraDevice ?: return
+        val readerSurface = imageReader?.surface ?: return
+
+        try {
+            val requestBuilder = buildRepeatingRequestBuilder(camera, readerSurface)
+            session.setRepeatingRequest(requestBuilder.build(), null, backgroundHandler)
+            Log.i(tag, "Applied capture session orientation update ($userRotationDegrees°)")
+        } catch (e: Exception) {
+            Log.w(tag, "Failed to update repeating request orientation: ${e.message}")
         }
     }
 
@@ -370,12 +422,48 @@ class AndroidCameraManager(private val context: Context) {
         }
     }
 
+    fun startDesktopStream() {
+        scope.launch {
+            val cmd = CameraControlCommand.newBuilder()
+                .setAction(CameraControlCommand.Action.ACTION_START_DESKTOP_STREAM)
+                .build()
+
+            ContinuityService.broadcastCameraMessage(
+                CameraMessage.newBuilder().setControl(cmd).build()
+            )
+            _uiState.value = _uiState.value.copy(isDesktopStreaming = true, isDesktopMirroring = true)
+            Log.i(tag, "Requested Hyprland desktop continuous streaming")
+        }
+    }
+
+    fun stopDesktopStream() {
+        scope.launch {
+            val cmd = CameraControlCommand.newBuilder()
+                .setAction(CameraControlCommand.Action.ACTION_STOP_DESKTOP_STREAM)
+                .build()
+
+            ContinuityService.broadcastCameraMessage(
+                CameraMessage.newBuilder().setControl(cmd).build()
+            )
+            _uiState.value = _uiState.value.copy(isDesktopStreaming = false)
+            Log.i(tag, "Stopped Hyprland desktop continuous streaming")
+        }
+    }
+
+    fun toggleDesktopStream() {
+        if (_uiState.value.isDesktopStreaming) {
+            stopDesktopStream()
+        } else {
+            startDesktopStream()
+        }
+    }
+
     fun handleDesktopScreenFrame(frame: DesktopScreenFrame) {
         try {
             val bytes = frame.imageBytes.toByteArray()
             val bmp = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
             _uiState.value = _uiState.value.copy(desktopScreenBitmap = bmp)
-            Log.i(tag, "Updated Desktop Screen Mirror frame (${bytes.size} bytes)")
+            Log.d(tag, "Updated Desktop Screen Mirror frame (${bytes.size} bytes)")
         } catch (e: Exception) {
             Log.w(tag, "Failed to decode DesktopScreenFrame: ${e.message}")
         }
@@ -401,6 +489,17 @@ class AndroidCameraManager(private val context: Context) {
             }
             CameraControlCommand.Action.ACTION_TAKE_SNAPSHOT -> {
                 takeSnapshot()
+            }
+            CameraControlCommand.Action.ACTION_START_DESKTOP_STREAM -> {
+                _uiState.value = _uiState.value.copy(isDesktopStreaming = true, isDesktopMirroring = true)
+            }
+            CameraControlCommand.Action.ACTION_STOP_DESKTOP_STREAM -> {
+                _uiState.value = _uiState.value.copy(isDesktopStreaming = false)
+            }
+            CameraControlCommand.Action.ACTION_SET_ROTATION -> {
+                userRotationDegrees = control.rotationDegrees % 360
+                _uiState.value = _uiState.value.copy(rotationDegrees = userRotationDegrees)
+                updateCaptureSessionOrientation()
             }
             else -> {}
         }

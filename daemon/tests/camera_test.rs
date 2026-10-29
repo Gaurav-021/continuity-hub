@@ -25,6 +25,7 @@ async fn test_camera_manager_frame_and_config() {
         format: 0,
         torch_enabled: true,
         zoom_ratio: 1.0,
+        rotation_degrees: 0,
     };
 
     camera_mgr

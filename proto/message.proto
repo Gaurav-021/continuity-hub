@@ -363,6 +363,7 @@ message CameraConfig {
     VideoFormat format = 5;
     bool torch_enabled = 6;
     float zoom_ratio = 7;
+    uint32 rotation_degrees = 8;
 }
 
 message CameraControlCommand {
@@ -375,6 +376,9 @@ message CameraControlCommand {
         ACTION_SET_ZOOM = 5;
         ACTION_TAKE_SNAPSHOT = 6;
         ACTION_REQUEST_DESKTOP_SCREEN = 7;
+        ACTION_START_DESKTOP_STREAM = 8;
+        ACTION_STOP_DESKTOP_STREAM = 9;
+        ACTION_SET_ROTATION = 10;
     }
     Action action = 1;
     CameraConfig.Lens lens = 2;
@@ -382,6 +386,7 @@ message CameraControlCommand {
     float zoom_ratio = 4;
     uint32 width = 5;
     uint32 height = 6;
+    uint32 rotation_degrees = 7;
 }
 
 message CameraFrame {

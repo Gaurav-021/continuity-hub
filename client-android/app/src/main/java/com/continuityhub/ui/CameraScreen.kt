@@ -2,6 +2,9 @@ package com.continuityhub.ui
 
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -20,11 +23,17 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CameraAlt
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Computer
 import androidx.compose.material.icons.filled.FlashOff
 import androidx.compose.material.icons.filled.FlashOn
 import androidx.compose.material.icons.filled.FlipCameraAndroid
+import androidx.compose.material.icons.filled.Fullscreen
+import androidx.compose.material.icons.filled.FullscreenExit
+import androidx.compose.material.icons.filled.Pause
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.ScreenRotation
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material.icons.filled.VideocamOff
@@ -35,9 +44,9 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ElevatedCard
 import androidx.compose.material3.FilledIconButton
+import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Slider
@@ -46,16 +55,24 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import com.continuityhub.proto.CameraConfig
 import com.continuityhub.service.ContinuityService
 
@@ -66,6 +83,18 @@ fun CameraScreen(
 ) {
     val cameraState by ContinuityService.cameraUiState.collectAsState()
     val cameraManager = ContinuityService.getCameraManager()
+    var showFullscreenMirror by remember { mutableStateOf(false) }
+
+    // Fullscreen Landscape Desktop Mirror Dialog
+    if (showFullscreenMirror && cameraState.desktopScreenBitmap != null) {
+        DesktopFullscreenViewer(
+            bitmap = cameraState.desktopScreenBitmap!!,
+            isStreaming = cameraState.isDesktopStreaming,
+            onToggleStream = { cameraManager?.toggleDesktopStream() },
+            onRefresh = { cameraManager?.requestDesktopScreen() },
+            onDismiss = { showFullscreenMirror = false }
+        )
+    }
 
     Column(
         modifier = modifier
@@ -92,8 +121,10 @@ fun CameraScreen(
                     Image(
                         bitmap = cameraState.previewBitmap!!.asImageBitmap(),
                         contentDescription = "Camera Viewfinder",
-                        modifier = Modifier.fillMaxSize(),
-                        contentScale = ContentScale.Crop
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .graphicsLayer(rotationZ = cameraState.rotationDegrees.toFloat()),
+                        contentScale = ContentScale.Fit
                     )
                 } else {
                     Column(
@@ -151,18 +182,33 @@ fun CameraScreen(
                         )
                     }
 
-                    // Resolution badge
-                    Box(
-                        modifier = Modifier
-                            .background(Color(0x88000000), shape = RoundedCornerShape(9999.dp))
-                            .padding(horizontal = 8.dp, vertical = 4.dp)
-                    ) {
-                        Text(
-                            text = "${cameraState.width}x${cameraState.height}",
-                            color = Color.White,
-                            fontSize = 11.sp,
-                            fontFamily = FontFamily.Monospace
-                        )
+                    // Resolution & Rotation Badges
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Box(
+                            modifier = Modifier
+                                .background(Color(0x88000000), shape = RoundedCornerShape(9999.dp))
+                                .padding(horizontal = 8.dp, vertical = 4.dp)
+                        ) {
+                            Text(
+                                text = "${cameraState.rotationDegrees}°",
+                                color = Color.White,
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+
+                        Box(
+                            modifier = Modifier
+                                .background(Color(0x88000000), shape = RoundedCornerShape(9999.dp))
+                                .padding(horizontal = 8.dp, vertical = 4.dp)
+                        ) {
+                            Text(
+                                text = "${cameraState.width}x${cameraState.height}",
+                                color = Color.White,
+                                fontSize = 11.sp,
+                                fontFamily = FontFamily.Monospace
+                            )
+                        }
                     }
                 }
             }
@@ -210,10 +256,10 @@ fun CameraScreen(
                     )
                 }
 
-                // Action Toolbar (Switch Lens, Torch, Snapshot)
+                // Action Toolbar (Switch Lens, Rotate 90°, Torch, Snapshot)
                 Row(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceEvenly,
+                    horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     // Switch Lens
@@ -221,9 +267,19 @@ fun CameraScreen(
                         onClick = { cameraManager?.toggleLens() },
                         shape = RoundedCornerShape(12.dp)
                     ) {
-                        Icon(Icons.Default.FlipCameraAndroid, contentDescription = "Switch Lens")
-                        Spacer(modifier = Modifier.width(6.dp))
+                        Icon(Icons.Default.FlipCameraAndroid, contentDescription = "Switch Lens", modifier = Modifier.size(18.dp))
+                        Spacer(modifier = Modifier.width(4.dp))
                         Text(if (cameraState.lens == CameraConfig.Lens.LENS_FRONT) "Front" else "Back")
+                    }
+
+                    // Rotate 90°
+                    OutlinedButton(
+                        onClick = { cameraManager?.rotateCamera(90) },
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        Icon(Icons.Default.ScreenRotation, contentDescription = "Rotate", modifier = Modifier.size(18.dp))
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("${cameraState.rotationDegrees}°")
                     }
 
                     // Torch Toggle
@@ -235,17 +291,16 @@ fun CameraScreen(
                         Icon(
                             imageVector = if (cameraState.isTorchOn) Icons.Default.FlashOn else Icons.Default.FlashOff,
                             contentDescription = "Torch",
+                            modifier = Modifier.size(18.dp),
                             tint = if (cameraState.isTorchOn) Color(0xFFFFB300) else MaterialTheme.colorScheme.onSurface
                         )
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text(if (cameraState.isTorchOn) "Torch ON" else "Torch OFF")
                     }
 
                     // Snapshot Shutter
                     FilledIconButton(
                         onClick = { cameraManager?.takeSnapshot() },
                         enabled = cameraState.isStreaming,
-                        modifier = Modifier.size(48.dp)
+                        modifier = Modifier.size(44.dp)
                     ) {
                         Icon(Icons.Default.CameraAlt, contentDescription = "Snapshot")
                     }
@@ -276,7 +331,7 @@ fun CameraScreen(
             }
         }
 
-        // 3. Desktop Screencopy Mirror Card
+        // 3. Desktop Screencopy Mirror Card with Live Streaming & Fullscreen
         ElevatedCard(
             modifier = Modifier.fillMaxWidth(),
             colors = CardDefaults.elevatedCardColors(containerColor = MaterialTheme.colorScheme.surface),
@@ -309,41 +364,112 @@ fun CameraScreen(
                             }
                         }
                         Spacer(modifier = Modifier.width(10.dp))
-                        Text(
-                            text = "Hyprland Desktop Mirror",
-                            style = MaterialTheme.typography.titleMedium
-                        )
+                        Column {
+                            Text(
+                                text = "Hyprland Desktop Mirror",
+                                style = MaterialTheme.typography.titleMedium
+                            )
+                            if (cameraState.isDesktopStreaming) {
+                                Text(
+                                    text = "LIVE STREAMING",
+                                    fontSize = 10.sp,
+                                    color = Color(0xFF22C55E),
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                        }
                     }
 
-                    OutlinedButton(
-                        onClick = { cameraManager?.requestDesktopScreen() },
-                        enabled = isConnected,
-                        shape = RoundedCornerShape(12.dp)
-                    ) {
-                        Icon(Icons.Default.Refresh, contentDescription = "Refresh", modifier = Modifier.size(16.dp))
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Text("Capture", style = MaterialTheme.typography.labelSmall)
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        // Fullscreen button
+                        if (cameraState.desktopScreenBitmap != null) {
+                            FilledIconButton(
+                                onClick = { showFullscreenMirror = true },
+                                modifier = Modifier.size(36.dp)
+                            ) {
+                                Icon(Icons.Default.Fullscreen, contentDescription = "Fullscreen", modifier = Modifier.size(20.dp))
+                            }
+                        }
+
+                        // Refresh / Capture button
+                        OutlinedButton(
+                            onClick = { cameraManager?.requestDesktopScreen() },
+                            enabled = isConnected && !cameraState.isDesktopStreaming,
+                            shape = RoundedCornerShape(12.dp)
+                        ) {
+                            Icon(Icons.Default.Refresh, contentDescription = "Capture", modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("Capture", style = MaterialTheme.typography.labelSmall)
+                        }
                     }
                 }
 
                 Spacer(modifier = Modifier.height(8.dp))
                 Text(
-                    text = "View a live screencast of your Linux desktop right on your phone.",
+                    text = "Stream a real-time feed of your Linux desktop or view in fullscreen landscape.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.outline
                 )
 
+                Spacer(modifier = Modifier.height(12.dp))
+
+                // Live Streaming Toggle Button
+                Button(
+                    onClick = { cameraManager?.toggleDesktopStream() },
+                    enabled = isConnected,
+                    modifier = Modifier.fillMaxWidth().height(44.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = if (cameraState.isDesktopStreaming) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.tertiary
+                    ),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Icon(
+                        imageVector = if (cameraState.isDesktopStreaming) Icons.Default.Pause else Icons.Default.PlayArrow,
+                        contentDescription = null,
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = if (cameraState.isDesktopStreaming) "Stop Desktop Stream" else "Start Live Desktop Stream (~15 FPS)",
+                        style = MaterialTheme.typography.labelLarge,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+
                 if (cameraState.desktopScreenBitmap != null) {
                     Spacer(modifier = Modifier.height(14.dp))
-                    Image(
-                        bitmap = cameraState.desktopScreenBitmap!!.asImageBitmap(),
-                        contentDescription = "Desktop Screen Mirror",
+                    Box(
                         modifier = Modifier
                             .fillMaxWidth()
                             .aspectRatio(16f / 10f)
-                            .clip(RoundedCornerShape(14.dp)),
-                        contentScale = ContentScale.Fit
-                    )
+                            .clip(RoundedCornerShape(14.dp))
+                            .clickable { showFullscreenMirror = true }
+                    ) {
+                        Image(
+                            bitmap = cameraState.desktopScreenBitmap!!.asImageBitmap(),
+                            contentDescription = "Desktop Screen Mirror (Tap for Fullscreen)",
+                            modifier = Modifier.fillMaxSize(),
+                            contentScale = ContentScale.Fit
+                        )
+
+                        // Tap to enlarge hint badge
+                        Surface(
+                            modifier = Modifier
+                                .align(Alignment.BottomEnd)
+                                .padding(8.dp),
+                            color = Color(0xAA000000),
+                            shape = RoundedCornerShape(8.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(Icons.Default.Fullscreen, contentDescription = null, tint = Color.White, modifier = Modifier.size(14.dp))
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("Tap for Fullscreen", color = Color.White, fontSize = 11.sp)
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -368,6 +494,170 @@ fun CameraScreen(
                     fontFamily = FontFamily.Monospace,
                     color = MaterialTheme.colorScheme.primary
                 )
+            }
+        }
+    }
+}
+
+/**
+ * Immersive Fullscreen Desktop Screen Viewer with pinch-to-zoom, pan, and live streaming controls.
+ */
+@Composable
+fun DesktopFullscreenViewer(
+    bitmap: android.graphics.Bitmap,
+    isStreaming: Boolean,
+    onToggleStream: () -> Unit,
+    onRefresh: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    var scale by remember { mutableFloatStateOf(1.0f) }
+    var offsetX by remember { mutableFloatStateOf(0f) }
+    var offsetY by remember { mutableFloatStateOf(0f) }
+
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(
+            usePlatformDefaultWidth = false,
+            decorFitsSystemWindows = false
+        )
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color.Black)
+        ) {
+            // Interactive Zoomable Desktop Image
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .pointerInput(Unit) {
+                        detectTapGestures(
+                            onDoubleTap = {
+                                scale = if (scale > 1.2f) 1.0f else 2.2f
+                                offsetX = 0f
+                                offsetY = 0f
+                            }
+                        )
+                    }
+                    .pointerInput(Unit) {
+                        detectTransformGestures { _, pan, zoom, _ ->
+                            scale = (scale * zoom).coerceIn(1.0f, 5.0f)
+                            if (scale > 1.0f) {
+                                offsetX += pan.x
+                                offsetY += pan.y
+                            } else {
+                                offsetX = 0f
+                                offsetY = 0f
+                            }
+                        }
+                    },
+                contentAlignment = Alignment.Center
+            ) {
+                Image(
+                    bitmap = bitmap.asImageBitmap(),
+                    contentDescription = "Fullscreen Desktop View",
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .graphicsLayer(
+                            scaleX = scale,
+                            scaleY = scale,
+                            translationX = offsetX,
+                            translationY = offsetY
+                        ),
+                    contentScale = ContentScale.Fit
+                )
+            }
+
+            // Top Floating Control Bar
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .align(Alignment.TopCenter)
+                    .padding(horizontal = 16.dp, vertical = 24.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Surface(
+                    color = Color(0xAA000000),
+                    shape = RoundedCornerShape(9999.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(8.dp)
+                                .background(
+                                    if (isStreaming) Color(0xFF22C55E) else Color.Gray,
+                                    shape = CircleShape
+                                )
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = if (isStreaming) "LIVE STREAM" else "PAUSED",
+                            color = Color.White,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                        if (scale > 1.05f) {
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = "•  ${String.format("%.1fx", scale)}",
+                                color = Color(0xFF38BDF8),
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                    }
+                }
+
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    // Play/Pause stream
+                    FilledIconButton(
+                        onClick = onToggleStream,
+                        modifier = Modifier.size(40.dp)
+                    ) {
+                        Icon(
+                            imageVector = if (isStreaming) Icons.Default.Pause else Icons.Default.PlayArrow,
+                            contentDescription = "Toggle Stream"
+                        )
+                    }
+
+                    // Refresh frame
+                    FilledIconButton(
+                        onClick = onRefresh,
+                        modifier = Modifier.size(40.dp)
+                    ) {
+                        Icon(Icons.Default.Refresh, contentDescription = "Refresh")
+                    }
+
+                    // Close / Exit Fullscreen
+                    FilledIconButton(
+                        onClick = onDismiss,
+                        modifier = Modifier.size(40.dp)
+                    ) {
+                        Icon(Icons.Default.FullscreenExit, contentDescription = "Exit Fullscreen")
+                    }
+                }
+            }
+
+            // Bottom Double-Tap Reset Zoom Hint
+            if (scale > 1.05f) {
+                Surface(
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .padding(bottom = 24.dp),
+                    color = Color(0x88000000),
+                    shape = RoundedCornerShape(9999.dp)
+                ) {
+                    Text(
+                        text = "Double-tap to reset zoom",
+                        color = Color.White,
+                        fontSize = 11.sp,
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
+                    )
+                }
             }
         }
     }
