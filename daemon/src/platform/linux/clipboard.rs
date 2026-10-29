@@ -1,10 +1,8 @@
-use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::Arc;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 use async_trait::async_trait;
-use sha2::{Digest, Sha256};
 use tokio::fs::OpenOptions;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::Command;
@@ -12,49 +10,9 @@ use tokio::sync::{mpsc, Mutex};
 use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
-use crate::platform::traits::{ClipboardBackend, ClipboardError, ClipboardItem};
-
-pub fn hash_data(data: &[u8]) -> String {
-    let mut hasher = Sha256::new();
-    hasher.update(data);
-    hex::encode(hasher.finalize())
-}
-
-pub fn now_ms() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis() as u64
-}
-
-#[derive(Debug)]
-struct DedupCache {
-    capacity: usize,
-    entries: VecDeque<(String, u64)>, // (hash, timestamp_ms)
-}
-
-impl DedupCache {
-    fn new(capacity: usize) -> Self {
-        Self {
-            capacity,
-            entries: VecDeque::with_capacity(capacity),
-        }
-    }
-
-    fn contains(&self, hash: &str) -> bool {
-        self.entries.iter().any(|(h, _)| h == hash)
-    }
-
-    fn insert(&mut self, hash: String, ts: u64) {
-        if self.contains(&hash) {
-            return;
-        }
-        if self.entries.len() >= self.capacity {
-            self.entries.pop_front();
-        }
-        self.entries.push_back((hash, ts));
-    }
-}
+use crate::platform::traits::{
+    hash_data, now_ms, ClipboardBackend, ClipboardError, ClipboardItem, DedupCache,
+};
 
 struct FifoCleanup(PathBuf);
 impl Drop for FifoCleanup {

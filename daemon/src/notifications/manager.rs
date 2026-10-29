@@ -64,6 +64,7 @@ impl NotificationManager {
                 let active_map = Arc::clone(&self.active_notifications);
                 let actions = payload.actions.clone();
 
+                #[cfg(target_os = "linux")]
                 tokio::spawn(async move {
                     let mut notification = notify_rust::Notification::new();
                     notification
@@ -147,12 +148,19 @@ impl NotificationManager {
                     }
                 });
 
+                #[cfg(not(target_os = "linux"))]
+                {
+                    let _ = (&body, &notif_id, &my_device_id, &active_map, &actions, &peer_tx);
+                    info!("Incoming notification: [{}] {}", payload.app_name, summary);
+                }
+
                 None
             }
 
             Msg::Dismiss(dismiss) => {
                 debug!("Notification dismissed on phone: {}", dismiss.notification_id);
                 let mut map = self.active_notifications.lock().await;
+                #[cfg(target_os = "linux")]
                 if let Some(desktop_id) = map.remove(&dismiss.notification_id) {
                     tokio::spawn(async move {
                         if let Ok(conn) = zbus::connection::Connection::session().await {
@@ -167,6 +175,10 @@ impl NotificationManager {
                                 .await;
                         }
                     });
+                }
+                #[cfg(not(target_os = "linux"))]
+                {
+                    map.remove(&dismiss.notification_id);
                 }
                 None
             }

@@ -23,7 +23,7 @@ use engine::SyncEngine;
 use input::InputManager;
 use media::MediaManager;
 use notifications::NotificationManager;
-use platform::linux::WaylandClipboardBackend;
+use platform::DefaultClipboardBackend;
 use telephony::TelephonyManager;
 use transfer::FileTransferManager;
 use transport::tofu::TofuStore;
@@ -106,7 +106,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     info!("Local Certificate Fingerprint (SHA-256): {}", identity.fingerprint);
 
     let tofu_store = TofuStore::new(&base_dir)?;
-    let clipboard_backend = Arc::new(WaylandClipboardBackend::new());
+    let clipboard_backend = Arc::new(DefaultClipboardBackend::new());
     let file_transfer_mgr = Arc::new(FileTransferManager::new(
         None,
         identity.config.device_id.clone(),

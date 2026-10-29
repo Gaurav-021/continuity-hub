@@ -62,21 +62,29 @@ pub fn show_file_received_notification(
     let summary = format!("Received '{}' from {}", file_name, sender_name);
     let body = format!("Size: {}\nSaved to: {}", size_str, file_path.display());
 
-    let res = notify_rust::Notification::new()
-        .appname("Continuity Hub")
-        .summary(&summary)
-        .body(&body)
-        .icon("document-save")
-        .timeout(notify_rust::Timeout::Milliseconds(6000))
-        .show();
+    #[cfg(target_os = "linux")]
+    {
+        let res = notify_rust::Notification::new()
+            .appname("Continuity Hub")
+            .summary(&summary)
+            .body(&body)
+            .icon("document-save")
+            .timeout(notify_rust::Timeout::Milliseconds(6000))
+            .show();
 
-    if res.is_err() {
-        let _ = std::process::Command::new("notify-send")
-            .arg("-a")
-            .arg("Continuity Hub")
-            .arg(&summary)
-            .arg(&body)
-            .spawn();
+        if res.is_err() {
+            let _ = std::process::Command::new("notify-send")
+                .arg("-a")
+                .arg("Continuity Hub")
+                .arg(&summary)
+                .arg(&body)
+                .spawn();
+        }
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    {
+        tracing::info!("Continuity File Transfer: {} - {}", summary, body);
     }
 }
 

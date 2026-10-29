@@ -1,0 +1,25 @@
+[Desktop Entry]
+Name=Continuity Hub
+GenericName=Cross-Platform Continuity & Phone Bridge
+Comment=Seamless clipboard sync, trackpad control, camera webcam, and telephony bridge for Android & Linux
+Exec=continuity-daemon
+Icon=continuity-hub
+Terminal=false
+Type=Application
+Categories=Utility;Network;HardwareSettings;
+Keywords=android;phone;continuity;clipboard;trackpad;webcam;telephony;sms;kdeconnect;
+StartupNotify=true
+
+Actions=SendFile;ViewStatus;StopDaemon;
+
+[Desktop Action SendFile]
+Name=Send File to Phone...
+Exec=bash -c 'command -v zenity >/dev/null && f=$(zenity --file-selection --title="Select File to Send via Continuity") && continuity-daemon --send-file "$f" || echo "Zenity not found"'
+
+[Desktop Action ViewStatus]
+Name=View Waybar Telemetry
+Exec=continuity-daemon --waybar
+
+[Desktop Action StopDaemon]
+Name=Stop Continuity Daemon
+Exec=killall continuity-daemon

@@ -29,12 +29,21 @@ thiserror = "2.0"
 futures = "0.3"
 chrono = { version = "0.4", features = ["serde"] }
 clap = { version = "4.5", features = ["derive"] }
+[target.'cfg(target_os = "linux")'.dependencies]
 libc = "0.2"
 notify-rust = { version = "4.11", default-features = false, features = ["z"] }
 zbus = "5.19"
 wayland-client = "0.31"
 wayland-protocols-wlr = { version = "0.3", features = ["client"] }
 
+[target.'cfg(target_os = "windows")'.dependencies]
+windows-sys = { version = "0.59", features = [
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_System_DataExchange",
+    "Win32_System_Memory",
+    "Win32_Foundation"
+] }
 
 [build-dependencies]
 prost-build = "0.13"

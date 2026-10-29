@@ -44,7 +44,11 @@ impl TelephonyManager {
             latest_telemetry: Arc::new(RwLock::new(None)),
             active_call_notifications: Arc::new(Mutex::new(HashMap::new())),
             connected_peer_name: Arc::new(RwLock::new(None)),
-            telemetry_file_path: std::path::PathBuf::from("/tmp/continuity-waybar.json"),
+            telemetry_file_path: if cfg!(target_os = "linux") {
+                std::path::PathBuf::from("/tmp/continuity-waybar.json")
+            } else {
+                std::env::temp_dir().join("continuity-telemetry.json")
+            },
             media_mgr: Arc::new(RwLock::new(None)),
         }
     }
@@ -153,6 +157,7 @@ impl TelephonyManager {
                 let active_map = Arc::clone(&self.active_call_notifications);
                 let my_device_id = self.my_device_id.clone();
 
+                #[cfg(target_os = "linux")]
                 tokio::spawn(async move {
                     let mut notification = notify_rust::Notification::new();
                     notification
@@ -230,6 +235,12 @@ impl TelephonyManager {
                         }
                     }
                 });
+
+                #[cfg(not(target_os = "linux"))]
+                {
+                    let _ = (&call_id, &phone_num, &active_map, &my_device_id, &peer_tx);
+                    info!("Incoming Call from {}", caller_display);
+                }
             }
             CallState::Idle | CallState::Offhook => {
                 debug!("Call {} state changed to {:?}, closing ringing alert", call.call_id, state);
@@ -254,6 +265,7 @@ impl TelephonyManager {
                     m.unduck_media().await;
                 }
 
+                #[cfg(target_os = "linux")]
                 tokio::spawn(async move {
                     let mut notification = notify_rust::Notification::new();
                     notification
@@ -281,6 +293,7 @@ impl TelephonyManager {
             };
 
             let body = sms.body.clone();
+            #[cfg(target_os = "linux")]
             tokio::spawn(async move {
                 let mut notification = notify_rust::Notification::new();
                 notification
@@ -291,6 +304,10 @@ impl TelephonyManager {
                     .timeout(notify_rust::Timeout::Milliseconds(8000));
                 let _ = notification.show_async().await;
             });
+            #[cfg(not(target_os = "linux"))]
+            {
+                let _ = (&sender, &body);
+            }
         }
     }
 
@@ -418,16 +435,23 @@ impl TelephonyManager {
     }
 
     async fn close_desktop_notification(id: u32) {
-        if let Ok(connection) = zbus::connection::Connection::session().await {
-            let _ = connection
-                .call_method(
-                    Some("org.freedesktop.Notifications"),
-                    "/org/freedesktop/Notifications",
-                    Some("org.freedesktop.Notifications"),
-                    "CloseNotification",
-                    &(id),
-                )
-                .await;
+        #[cfg(target_os = "linux")]
+        {
+            if let Ok(connection) = zbus::connection::Connection::session().await {
+                let _ = connection
+                    .call_method(
+                        Some("org.freedesktop.Notifications"),
+                        "/org/freedesktop/Notifications",
+                        Some("org.freedesktop.Notifications"),
+                        "CloseNotification",
+                        &(id),
+                    )
+                    .await;
+            }
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            let _ = id;
         }
     }
 }

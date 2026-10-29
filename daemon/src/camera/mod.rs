@@ -359,24 +359,31 @@ impl CameraManager {
 
     /// Capture current Hyprland screen via grim and encode as JPEG
     pub async fn capture_desktop_screen(&self) -> Option<Vec<u8>> {
-        let output = tokio::process::Command::new("grim")
-            .args(["-t", "jpeg", "-q", "65", "-"])
-            .output()
-            .await;
+        #[cfg(target_os = "linux")]
+        {
+            let output = tokio::process::Command::new("grim")
+                .args(["-t", "jpeg", "-q", "65", "-"])
+                .output()
+                .await;
 
-        match output {
-            Ok(out) if out.status.success() && !out.stdout.is_empty() => {
-                debug!("Captured Hyprland desktop screen ({} bytes)", out.stdout.len());
-                Some(out.stdout)
+            match output {
+                Ok(out) if out.status.success() && !out.stdout.is_empty() => {
+                    debug!("Captured Hyprland desktop screen ({} bytes)", out.stdout.len());
+                    Some(out.stdout)
+                }
+                Ok(out) => {
+                    warn!("grim command exited with error: {}", String::from_utf8_lossy(&out.stderr));
+                    None
+                }
+                Err(e) => {
+                    warn!("Failed to execute grim for desktop capture: {}", e);
+                    None
+                }
             }
-            Ok(out) => {
-                warn!("grim command exited with error: {}", String::from_utf8_lossy(&out.stderr));
-                None
-            }
-            Err(e) => {
-                warn!("Failed to execute grim for desktop capture: {}", e);
-                None
-            }
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            None
         }
     }
 

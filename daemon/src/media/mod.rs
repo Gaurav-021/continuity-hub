@@ -4,7 +4,10 @@ use std::sync::Arc;
 use prost::Message;
 use tokio::sync::{mpsc, Mutex, RwLock};
 use tracing::{debug, error, info, warn};
+
+#[cfg(target_os = "linux")]
 use zbus::interface;
+#[cfg(target_os = "linux")]
 use zbus::zvariant::{ObjectPath, OwnedObjectPath, OwnedValue, Value};
 
 use crate::proto::{
@@ -14,8 +17,10 @@ use crate::proto::{
     Channel, MediaControlCommand, MediaMessage, MediaMetadata, MediaPlaybackState, Packet,
 };
 
+#[cfg(target_os = "linux")]
 pub struct MprisRoot;
 
+#[cfg(target_os = "linux")]
 #[interface(name = "org.mpris.MediaPlayer2")]
 impl MprisRoot {
     #[zbus(property)]
@@ -60,7 +65,10 @@ impl MprisRoot {
 #[derive(Clone, Debug)]
 pub struct PlayerState {
     pub playback_status: String,
+    #[cfg(target_os = "linux")]
     pub metadata: HashMap<String, OwnedValue>,
+    #[cfg(not(target_os = "linux"))]
+    pub metadata: HashMap<String, String>,
     pub position_us: i64,
     pub volume: f64,
     pub can_control: bool,
@@ -94,11 +102,13 @@ impl Default for PlayerState {
     }
 }
 
+#[cfg(target_os = "linux")]
 pub struct MprisPlayer {
     state: Arc<RwLock<PlayerState>>,
     command_tx: mpsc::Sender<MediaControlCommand>,
 }
 
+#[cfg(target_os = "linux")]
 #[interface(name = "org.mpris.MediaPlayer2.Player")]
 impl MprisPlayer {
     async fn next(&self) {
@@ -278,6 +288,7 @@ pub struct MediaManager {
     active_peer_tx: Arc<RwLock<Option<mpsc::Sender<Packet>>>>,
     ducked_players: Arc<Mutex<HashSet<String>>>,
     art_cache_path: PathBuf,
+    #[cfg(target_os = "linux")]
     dbus_conn: Arc<RwLock<Option<zbus::Connection>>>,
 }
 
@@ -326,10 +337,12 @@ impl MediaManager {
             active_peer_tx,
             ducked_players: Arc::new(Mutex::new(HashSet::new())),
             art_cache_path,
+            #[cfg(target_os = "linux")]
             dbus_conn: Arc::new(RwLock::new(None)),
         })
     }
 
+    #[cfg(target_os = "linux")]
     pub async fn start_dbus_server(self: &Arc<Self>) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let mpris_player = MprisPlayer {
             state: Arc::clone(&self.state),
@@ -354,6 +367,11 @@ impl MediaManager {
             }
         }
 
+        Ok(())
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    pub async fn start_dbus_server(self: &Arc<Self>) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         Ok(())
     }
 
@@ -431,51 +449,55 @@ impl MediaManager {
             }
         }
 
+        #[cfg(target_os = "linux")]
         let mut dbus_metadata = HashMap::new();
-        let track_id_path = if meta.track_id.is_empty() {
-            "/org/continuity/current_track".to_string()
-        } else {
-            let sanitized: String = meta
-                .track_id
-                .chars()
-                .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
-                .collect();
-            format!("/org/continuity/track/{}", sanitized)
-        };
+        #[cfg(target_os = "linux")]
+        {
+            let track_id_path = if meta.track_id.is_empty() {
+                "/org/continuity/current_track".to_string()
+            } else {
+                let sanitized: String = meta
+                    .track_id
+                    .chars()
+                    .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
+                    .collect();
+                format!("/org/continuity/track/{}", sanitized)
+            };
 
-        if let Ok(path) = ObjectPath::try_from(track_id_path) {
-            if let Ok(ov) = OwnedValue::try_from(Value::from(path)) {
-                dbus_metadata.insert("mpris:trackid".to_string(), ov);
+            if let Ok(path) = ObjectPath::try_from(track_id_path) {
+                if let Ok(ov) = OwnedValue::try_from(Value::from(path)) {
+                    dbus_metadata.insert("mpris:trackid".to_string(), ov);
+                }
             }
-        }
 
-        if !meta.title.is_empty() {
-            if let Ok(ov) = OwnedValue::try_from(Value::from(meta.title.as_str())) {
-                dbus_metadata.insert("xesam:title".to_string(), ov);
+            if !meta.title.is_empty() {
+                if let Ok(ov) = OwnedValue::try_from(Value::from(meta.title.as_str())) {
+                    dbus_metadata.insert("xesam:title".to_string(), ov);
+                }
             }
-        }
 
-        if !meta.artist.is_empty() {
-            let artists = vec![meta.artist.clone()];
-            if let Ok(ov) = OwnedValue::try_from(Value::from(artists)) {
-                dbus_metadata.insert("xesam:artist".to_string(), ov);
+            if !meta.artist.is_empty() {
+                let artists = vec![meta.artist.clone()];
+                if let Ok(ov) = OwnedValue::try_from(Value::from(artists)) {
+                    dbus_metadata.insert("xesam:artist".to_string(), ov);
+                }
             }
-        }
 
-        if !meta.album.is_empty() {
-            if let Ok(ov) = OwnedValue::try_from(Value::from(meta.album.as_str())) {
-                dbus_metadata.insert("xesam:album".to_string(), ov);
+            if !meta.album.is_empty() {
+                if let Ok(ov) = OwnedValue::try_from(Value::from(meta.album.as_str())) {
+                    dbus_metadata.insert("xesam:album".to_string(), ov);
+                }
             }
-        }
 
-        if meta.duration_ms > 0 {
-            let length_us = meta.duration_ms * 1000;
-            dbus_metadata.insert("mpris:length".to_string(), OwnedValue::from(length_us));
-        }
+            if meta.duration_ms > 0 {
+                let length_us = meta.duration_ms * 1000;
+                dbus_metadata.insert("mpris:length".to_string(), OwnedValue::from(length_us));
+            }
 
-        if !art_url.is_empty() {
-            if let Ok(ov) = OwnedValue::try_from(Value::from(art_url.as_str())) {
-                dbus_metadata.insert("mpris:artUrl".to_string(), ov);
+            if !art_url.is_empty() {
+                if let Ok(ov) = OwnedValue::try_from(Value::from(art_url.as_str())) {
+                    dbus_metadata.insert("mpris:artUrl".to_string(), ov);
+                }
             }
         }
 
@@ -484,13 +506,17 @@ impl MediaManager {
             state.track_title = meta.title;
             state.track_artist = meta.artist;
             state.track_album = meta.album;
-            state.metadata = dbus_metadata;
+            #[cfg(target_os = "linux")]
+            {
+                state.metadata = dbus_metadata;
+            }
         }
 
         // Emit PropertiesChanged signal
         self.emit_metadata_changed().await;
     }
 
+    #[cfg(target_os = "linux")]
     async fn emit_playback_status_changed(&self) {
         let guard = self.dbus_conn.read().await;
         if let Some(ref conn) = *guard {
@@ -511,6 +537,10 @@ impl MediaManager {
         }
     }
 
+    #[cfg(not(target_os = "linux"))]
+    async fn emit_playback_status_changed(&self) {}
+
+    #[cfg(target_os = "linux")]
     async fn emit_metadata_changed(&self) {
         let guard = self.dbus_conn.read().await;
         if let Some(ref conn) = *guard {
@@ -528,7 +558,11 @@ impl MediaManager {
         }
     }
 
+    #[cfg(not(target_os = "linux"))]
+    async fn emit_metadata_changed(&self) {}
+
     /// Smart Call Ducking: pause active desktop MPRIS players when a phone call rings
+    #[cfg(target_os = "linux")]
     pub async fn duck_media(&self) {
         let conn = match zbus::connection::Connection::session().await {
             Ok(c) => c,
@@ -597,7 +631,11 @@ impl MediaManager {
         }
     }
 
+    #[cfg(not(target_os = "linux"))]
+    pub async fn duck_media(&self) {}
+
     /// Smart Call Ducking: resume previously ducked desktop players after call ends
+    #[cfg(target_os = "linux")]
     pub async fn unduck_media(&self) {
         let conn = match zbus::connection::Connection::session().await {
             Ok(c) => c,
@@ -620,7 +658,11 @@ impl MediaManager {
         ducked.clear();
     }
 
+    #[cfg(not(target_os = "linux"))]
+    pub async fn unduck_media(&self) {}
+
     /// Desktop-to-Phone: forward remote media commands from phone to desktop MPRIS player
+    #[cfg(target_os = "linux")]
     pub async fn control_desktop_player(&self, cmd: &MediaControlCommand) {
         let conn = match zbus::connection::Connection::session().await {
             Ok(c) => c,
@@ -756,6 +798,9 @@ impl MediaManager {
             MediaCommand::Unknown => {}
         }
     }
+
+    #[cfg(not(target_os = "linux"))]
+    pub async fn control_desktop_player(&self, _cmd: &MediaControlCommand) {}
 
     pub fn create_control_packet(&self, command: MediaCommand, seek_position_ms: i64) -> Packet {
         let cmd = MediaControlCommand {

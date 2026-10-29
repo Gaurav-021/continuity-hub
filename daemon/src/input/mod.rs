@@ -1,9 +1,11 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc as std_mpsc;
 use std::sync::Arc;
+#[cfg(target_os = "linux")]
 use tokio::process::Command;
 use tracing::{debug, error, info, warn};
 
+#[cfg(target_os = "linux")]
 use wayland_client::{
     protocol::{
         wl_pointer::{Axis, ButtonState},
@@ -11,10 +13,14 @@ use wayland_client::{
     },
     Connection, Dispatch, QueueHandle,
 };
+#[cfg(target_os = "linux")]
 use wayland_protocols_wlr::virtual_pointer::v1::client::{
     zwlr_virtual_pointer_manager_v1::ZwlrVirtualPointerManagerV1,
     zwlr_virtual_pointer_v1::ZwlrVirtualPointerV1,
 };
+
+#[cfg(target_os = "windows")]
+use windows_sys::Win32::UI::Input::KeyboardAndMouse::*;
 
 use crate::proto::{
     mouse_button_event::{Button, State},
@@ -22,10 +28,14 @@ use crate::proto::{
 };
 
 // Linux input event codes
+#[cfg(target_os = "linux")]
 const BTN_LEFT: u32 = 0x110;   // 272
+#[cfg(target_os = "linux")]
 const BTN_RIGHT: u32 = 0x111;  // 273
+#[cfg(target_os = "linux")]
 const BTN_MIDDLE: u32 = 0x112; // 274
 
+#[cfg(target_os = "linux")]
 #[derive(Debug)]
 pub enum PointerCommand {
     Move { dx: f64, dy: f64 },
@@ -34,12 +44,14 @@ pub enum PointerCommand {
     Scroll { dx: f64, dy: f64 },
 }
 
+#[cfg(target_os = "linux")]
 struct WaylandState {
     manager: Option<ZwlrVirtualPointerManagerV1>,
     seat: Option<WlSeat>,
     pointer: Option<ZwlrVirtualPointerV1>,
 }
 
+#[cfg(target_os = "linux")]
 impl Dispatch<ZwlrVirtualPointerManagerV1, ()> for WaylandState {
     fn event(
         _state: &mut Self,
@@ -51,6 +63,7 @@ impl Dispatch<ZwlrVirtualPointerManagerV1, ()> for WaylandState {
     ) {}
 }
 
+#[cfg(target_os = "linux")]
 impl Dispatch<ZwlrVirtualPointerV1, ()> for WaylandState {
     fn event(
         _state: &mut Self,
@@ -62,6 +75,7 @@ impl Dispatch<ZwlrVirtualPointerV1, ()> for WaylandState {
     ) {}
 }
 
+#[cfg(target_os = "linux")]
 impl Dispatch<WlSeat, ()> for WaylandState {
     fn event(
         _state: &mut Self,
@@ -73,6 +87,7 @@ impl Dispatch<WlSeat, ()> for WaylandState {
     ) {}
 }
 
+#[cfg(target_os = "linux")]
 impl Dispatch<wayland_client::protocol::wl_registry::WlRegistry, ()> for WaylandState {
     fn event(
         state: &mut Self,
@@ -108,7 +123,9 @@ impl Dispatch<wayland_client::protocol::wl_registry::WlRegistry, ()> for Wayland
 }
 
 pub struct InputManager {
+    #[cfg(target_os = "linux")]
     pointer_tx: Option<std_mpsc::Sender<PointerCommand>>,
+    #[cfg(target_os = "linux")]
     wayland_available: Arc<AtomicBool>,
 }
 
@@ -119,6 +136,7 @@ impl Default for InputManager {
 }
 
 impl InputManager {
+    #[cfg(target_os = "linux")]
     pub fn new() -> Self {
         let (tx, rx) = std_mpsc::channel::<PointerCommand>();
         let wayland_available = Arc::new(AtomicBool::new(false));
@@ -137,6 +155,12 @@ impl InputManager {
         }
     }
 
+    #[cfg(not(target_os = "linux"))]
+    pub fn new() -> Self {
+        Self {}
+    }
+
+    #[cfg(target_os = "linux")]
     fn run_wayland_worker(
         rx: std_mpsc::Receiver<PointerCommand>,
         wayland_flag: Arc<AtomicBool>,
@@ -222,8 +246,14 @@ impl InputManager {
         }
     }
 
+    #[cfg(target_os = "linux")]
     pub fn is_wayland_active(&self) -> bool {
         self.wayland_available.load(Ordering::Relaxed)
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    pub fn is_wayland_active(&self) -> bool {
+        false
     }
 
     pub async fn handle_message(&self, message: InputMessage) {
@@ -246,146 +276,318 @@ impl InputManager {
     }
 
     pub async fn handle_mouse_move(&self, event: MouseMoveEvent) {
-        let dx = event.dx as f64;
-        let dy = event.dy as f64;
+        #[cfg(target_os = "linux")]
+        {
+            let dx = event.dx as f64;
+            let dy = event.dy as f64;
 
-        if let Some(ref tx) = self.pointer_tx {
-            if self.is_wayland_active() {
-                let _ = tx.send(PointerCommand::Move { dx, dy });
-                return;
+            if let Some(ref tx) = self.pointer_tx {
+                if self.is_wayland_active() {
+                    let _ = tx.send(PointerCommand::Move { dx, dy });
+                    return;
+                }
+            }
+
+            // Fallback: hyprctl cursorpos + dispatch movecursor
+            Self::fallback_hyprctl_move(dx, dy).await;
+        }
+
+        #[cfg(target_os = "windows")]
+        {
+            unsafe {
+                let mut input = std::mem::zeroed::<INPUT>();
+                input.r#type = INPUT_MOUSE;
+                input.Anonymous.mi.dx = event.dx.round() as i32;
+                input.Anonymous.mi.dy = event.dy.round() as i32;
+                input.Anonymous.mi.dwFlags = MOUSEEVENTF_MOVE;
+                SendInput(1, &input, std::mem::size_of::<INPUT>() as i32);
             }
         }
 
-        // Fallback: hyprctl cursorpos + dispatch movecursor
-        Self::fallback_hyprctl_move(dx, dy).await;
+        #[cfg(not(any(target_os = "linux", target_os = "windows")))]
+        {
+            let _ = event;
+        }
     }
 
     pub async fn handle_mouse_button(&self, event: MouseButtonEvent) {
-        let button_code = match Button::try_from(event.button) {
-            Ok(Button::Left) => BTN_LEFT,
-            Ok(Button::Right) => BTN_RIGHT,
-            Ok(Button::Middle) => BTN_MIDDLE,
-            _ => BTN_LEFT,
-        };
+        #[cfg(target_os = "linux")]
+        {
+            let button_code = match Button::try_from(event.button) {
+                Ok(Button::Left) => BTN_LEFT,
+                Ok(Button::Right) => BTN_RIGHT,
+                Ok(Button::Middle) => BTN_MIDDLE,
+                _ => BTN_LEFT,
+            };
 
-        if let Some(ref tx) = self.pointer_tx {
-            if self.is_wayland_active() {
-                match State::try_from(event.state) {
-                    Ok(State::Press) => {
-                        let _ = tx.send(PointerCommand::Button {
-                            button_code,
-                            pressed: true,
-                        });
-                    }
-                    Ok(State::Release) => {
-                        let _ = tx.send(PointerCommand::Button {
-                            button_code,
-                            pressed: false,
-                        });
-                    }
-                    _ => {
-                        let _ = tx.send(PointerCommand::Click { button_code });
+            if let Some(ref tx) = self.pointer_tx {
+                if self.is_wayland_active() {
+                    match State::try_from(event.state) {
+                        Ok(State::Press) => {
+                            let _ = tx.send(PointerCommand::Button {
+                                button_code,
+                                pressed: true,
+                            });
+                        }
+                        Ok(State::Release) => {
+                            let _ = tx.send(PointerCommand::Button {
+                                button_code,
+                                pressed: false,
+                            });
+                        }
+                        _ => {
+                            let _ = tx.send(PointerCommand::Click { button_code });
+                        }
                     }
                 }
             }
+        }
+
+        #[cfg(target_os = "windows")]
+        {
+            let (down_flag, up_flag) = match Button::try_from(event.button) {
+                Ok(Button::Right) => (MOUSEEVENTF_RIGHTDOWN, MOUSEEVENTF_RIGHTUP),
+                Ok(Button::Middle) => (MOUSEEVENTF_MIDDLEDOWN, MOUSEEVENTF_MIDDLEUP),
+                _ => (MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP),
+            };
+
+            let send_btn = |flags: u32| unsafe {
+                let mut input = std::mem::zeroed::<INPUT>();
+                input.r#type = INPUT_MOUSE;
+                input.Anonymous.mi.dwFlags = flags;
+                SendInput(1, &input, std::mem::size_of::<INPUT>() as i32);
+            };
+
+            match State::try_from(event.state) {
+                Ok(State::Press) => send_btn(down_flag),
+                Ok(State::Release) => send_btn(up_flag),
+                _ => {
+                    send_btn(down_flag);
+                    send_btn(up_flag);
+                }
+            }
+        }
+
+        #[cfg(not(any(target_os = "linux", target_os = "windows")))]
+        {
+            let _ = event;
         }
     }
 
     pub async fn handle_mouse_scroll(&self, event: MouseScrollEvent) {
-        let dx = event.dx as f64;
-        let dy = event.dy as f64;
+        #[cfg(target_os = "linux")]
+        {
+            let dx = event.dx as f64;
+            let dy = event.dy as f64;
 
-        if let Some(ref tx) = self.pointer_tx {
-            if self.is_wayland_active() {
-                let _ = tx.send(PointerCommand::Scroll { dx, dy });
+            if let Some(ref tx) = self.pointer_tx {
+                if self.is_wayland_active() {
+                    let _ = tx.send(PointerCommand::Scroll { dx, dy });
+                }
             }
+        }
+
+        #[cfg(target_os = "windows")]
+        {
+            let send_scroll = |flags: u32, data: i32| unsafe {
+                let mut input = std::mem::zeroed::<INPUT>();
+                input.r#type = INPUT_MOUSE;
+                input.Anonymous.mi.dwFlags = flags;
+                input.Anonymous.mi.mouseData = data as u32;
+                SendInput(1, &input, std::mem::size_of::<INPUT>() as i32);
+            };
+
+            if event.dy.abs() > 0.01 {
+                let delta = (-event.dy * 40.0).round() as i32;
+                send_scroll(MOUSEEVENTF_WHEEL, delta);
+            }
+            if event.dx.abs() > 0.01 {
+                let delta = (event.dx * 40.0).round() as i32;
+                send_scroll(MOUSEEVENTF_HWHEEL, delta);
+            }
+        }
+
+        #[cfg(not(any(target_os = "linux", target_os = "windows")))]
+        {
+            let _ = event;
         }
     }
 
     pub async fn handle_key_event(&self, event: KeyEvent) {
-        // 1. Text typing
-        if !event.text.is_empty() {
-            debug!("Typing text via wtype: '{}'", event.text);
-            let mut cmd = Command::new("wtype");
-            cmd.arg("--").arg(&event.text);
-            if let Err(e) = cmd.output().await {
-                error!("Failed executing wtype for text: {}", e);
+        #[cfg(target_os = "linux")]
+        {
+            // 1. Text typing
+            if !event.text.is_empty() {
+                debug!("Typing text via wtype: '{}'", event.text);
+                let mut cmd = Command::new("wtype");
+                cmd.arg("--").arg(&event.text);
+                if let Err(e) = cmd.output().await {
+                    error!("Failed executing wtype for text: {}", e);
+                }
+                return;
             }
-            return;
+
+            // 2. Special Key or Key with Modifiers
+            if !event.key_name.is_empty() {
+                let mut cmd = Command::new("wtype");
+
+                // Normalize modifiers
+                for m in &event.modifiers {
+                    let norm = m.trim().to_lowercase();
+                    let mod_name = match norm.as_str() {
+                        "ctrl" | "control" => "ctrl",
+                        "alt" => "alt",
+                        "shift" => "shift",
+                        "win" | "super" | "logo" => "logo",
+                        "capslock" => "capslock",
+                        _ => continue,
+                    };
+                    cmd.arg("-M").arg(mod_name);
+                }
+
+                // Map key name to standard XKB key identifier
+                let xkb_key = match event.key_name.as_str() {
+                    "Enter" | "Return" => "Return",
+                    "Backspace" | "BackSpace" => "BackSpace",
+                    "Tab" => "Tab",
+                    "Escape" | "Esc" => "Escape",
+                    "Space" | "space" => "space",
+                    "Up" | "ArrowUp" => "Up",
+                    "Down" | "ArrowDown" => "Down",
+                    "Left" | "ArrowLeft" => "Left",
+                    "Right" | "ArrowRight" => "Right",
+                    "Home" => "Home",
+                    "End" => "End",
+                    "PageUp" | "Page_Up" => "Page_Up",
+                    "PageDown" | "Page_Down" => "Page_Down",
+                    "Delete" | "Del" => "Delete",
+                    other => other,
+                };
+
+                let state = crate::proto::key_event::KeyState::try_from(event.state)
+                    .unwrap_or(crate::proto::key_event::KeyState::KeyClick);
+
+                match state {
+                    crate::proto::key_event::KeyState::KeyPress => {
+                        cmd.arg("-P").arg(xkb_key);
+                    }
+                    crate::proto::key_event::KeyState::KeyRelease => {
+                        cmd.arg("-p").arg(xkb_key);
+                    }
+                    _ => {
+                        cmd.arg("-k").arg(xkb_key);
+                    }
+                }
+
+                // Release modifiers
+                for m in event.modifiers.iter().rev() {
+                    let norm = m.trim().to_lowercase();
+                    let mod_name = match norm.as_str() {
+                        "ctrl" | "control" => "ctrl",
+                        "alt" => "alt",
+                        "shift" => "shift",
+                        "win" | "super" | "logo" => "logo",
+                        "capslock" => "capslock",
+                        _ => continue,
+                    };
+                    cmd.arg("-m").arg(mod_name);
+                }
+
+                if let Err(e) = cmd.output().await {
+                    error!("Failed executing wtype for key '{}': {}", event.key_name, e);
+                }
+            }
         }
 
-        // 2. Special Key or Key with Modifiers
-        if !event.key_name.is_empty() {
-            let mut cmd = Command::new("wtype");
+        #[cfg(target_os = "windows")]
+        {
+            if !event.text.is_empty() {
+                for ch in event.text.encode_utf16() {
+                    unsafe {
+                        let mut down = std::mem::zeroed::<INPUT>();
+                        down.r#type = INPUT_KEYBOARD;
+                        down.Anonymous.ki.wScan = ch;
+                        down.Anonymous.ki.dwFlags = KEYEVENTF_UNICODE;
 
-            // Normalize modifiers
-            for m in &event.modifiers {
-                let norm = m.trim().to_lowercase();
-                let mod_name = match norm.as_str() {
-                    "ctrl" | "control" => "ctrl",
-                    "alt" => "alt",
-                    "shift" => "shift",
-                    "win" | "super" | "logo" => "logo",
-                    "capslock" => "capslock",
-                    _ => continue,
+                        let mut up = std::mem::zeroed::<INPUT>();
+                        up.r#type = INPUT_KEYBOARD;
+                        up.Anonymous.ki.wScan = ch;
+                        up.Anonymous.ki.dwFlags = KEYEVENTF_UNICODE | KEYEVENTF_KEYUP;
+
+                        SendInput(1, &down, std::mem::size_of::<INPUT>() as i32);
+                        SendInput(1, &up, std::mem::size_of::<INPUT>() as i32);
+                    }
+                }
+                return;
+            }
+
+            if !event.key_name.is_empty() {
+                let vk: u16 = match event.key_name.as_str() {
+                    "Enter" | "Return" => 0x0D,
+                    "Backspace" | "BackSpace" => 0x08,
+                    "Tab" => 0x09,
+                    "Escape" | "Esc" => 0x1B,
+                    "Space" | "space" => 0x20,
+                    "Up" | "ArrowUp" => 0x26,
+                    "Down" | "ArrowDown" => 0x28,
+                    "Left" | "ArrowLeft" => 0x25,
+                    "Right" | "ArrowRight" => 0x27,
+                    "Home" => 0x24,
+                    "End" => 0x23,
+                    "PageUp" | "Page_Up" => 0x21,
+                    "PageDown" | "Page_Down" => 0x22,
+                    "Delete" | "Del" => 0x2E,
+                    _ => 0,
                 };
-                cmd.arg("-M").arg(mod_name);
-            }
 
-            // Map key name to standard XKB key identifier
-            let xkb_key = match event.key_name.as_str() {
-                "Enter" | "Return" => "Return",
-                "Backspace" | "BackSpace" => "BackSpace",
-                "Tab" => "Tab",
-                "Escape" | "Esc" => "Escape",
-                "Space" | "space" => "space",
-                "Up" | "ArrowUp" => "Up",
-                "Down" | "ArrowDown" => "Down",
-                "Left" | "ArrowLeft" => "Left",
-                "Right" | "ArrowRight" => "Right",
-                "Home" => "Home",
-                "End" => "End",
-                "PageUp" | "Page_Up" => "Page_Up",
-                "PageDown" | "Page_Down" => "Page_Down",
-                "Delete" | "Del" => "Delete",
-                other => other,
-            };
-
-            let state = crate::proto::key_event::KeyState::try_from(event.state)
-                .unwrap_or(crate::proto::key_event::KeyState::KeyClick);
-
-            match state {
-                crate::proto::key_event::KeyState::KeyPress => {
-                    cmd.arg("-P").arg(xkb_key);
-                }
-                crate::proto::key_event::KeyState::KeyRelease => {
-                    cmd.arg("-p").arg(xkb_key);
-                }
-                _ => {
-                    cmd.arg("-k").arg(xkb_key);
-                }
-            }
-
-            // Release modifiers
-            for m in event.modifiers.iter().rev() {
-                let norm = m.trim().to_lowercase();
-                let mod_name = match norm.as_str() {
-                    "ctrl" | "control" => "ctrl",
-                    "alt" => "alt",
-                    "shift" => "shift",
-                    "win" | "super" | "logo" => "logo",
-                    "capslock" => "capslock",
-                    _ => continue,
+                let send_vk = |code: u16, keyup: bool| unsafe {
+                    if code == 0 { return; }
+                    let mut input = std::mem::zeroed::<INPUT>();
+                    input.r#type = INPUT_KEYBOARD;
+                    input.Anonymous.ki.wVk = code;
+                    input.Anonymous.ki.dwFlags = if keyup { KEYEVENTF_KEYUP } else { 0 };
+                    SendInput(1, &input, std::mem::size_of::<INPUT>() as i32);
                 };
-                cmd.arg("-m").arg(mod_name);
-            }
 
-            if let Err(e) = cmd.output().await {
-                error!("Failed executing wtype for key '{}': {}", event.key_name, e);
+                let mod_to_vk = |m: &str| -> u16 {
+                    match m.trim().to_lowercase().as_str() {
+                        "ctrl" | "control" => 0x11,
+                        "alt" => 0x12,
+                        "shift" => 0x10,
+                        "win" | "super" | "logo" => 0x5B,
+                        _ => 0,
+                    }
+                };
+
+                for m in &event.modifiers {
+                    send_vk(mod_to_vk(m), false);
+                }
+
+                let state = crate::proto::key_event::KeyState::try_from(event.state)
+                    .unwrap_or(crate::proto::key_event::KeyState::KeyClick);
+
+                match state {
+                    crate::proto::key_event::KeyState::KeyPress => send_vk(vk, false),
+                    crate::proto::key_event::KeyState::KeyRelease => send_vk(vk, true),
+                    _ => {
+                        send_vk(vk, false);
+                        send_vk(vk, true);
+                    }
+                }
+
+                for m in event.modifiers.iter().rev() {
+                    send_vk(mod_to_vk(m), true);
+                }
             }
+        }
+
+        #[cfg(not(any(target_os = "linux", target_os = "windows")))]
+        {
+            let _ = event;
         }
     }
 
+    #[cfg(target_os = "linux")]
     async fn fallback_hyprctl_move(dx: f64, dy: f64) {
         if let Ok(output) = Command::new("hyprctl").arg("cursorpos").output().await {
             if let Ok(text) = String::from_utf8(output.stdout) {
@@ -414,7 +616,7 @@ mod tests {
     #[tokio::test]
     async fn test_input_manager_initialization_and_events() {
         let mgr = InputManager::new();
-        // Allow wayland worker thread to initialize
+        // Allow worker thread to initialize
         tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
 
         // Test sending mouse move
@@ -443,4 +645,3 @@ mod tests {
         }).await;
     }
 }
-

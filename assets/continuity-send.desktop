@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Service
+ServiceTypes=KonqPopupMenu/Plugin
+MimeType=all/allfiles;
+Actions=SendToPhone;
+X-KDE-Priority=TopLevel
+X-KDE-Submenu=Continuity Hub
+
+[Desktop Action SendToPhone]
+Name=Send to Phone via Continuity Hub
+Icon=continuity-hub
+Exec=continuity-daemon --send-file "%f"

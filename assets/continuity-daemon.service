@@ -1,0 +1,16 @@
+[Unit]
+Description=Continuity Hub Daemon - Linux & Android Phone Bridge
+After=graphical-session.target network.target
+PartOf=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/continuity-daemon
+Restart=on-failure
+RestartSec=3s
+Environment=RUST_LOG=info
+Environment=WAYLAND_DISPLAY=wayland-1
+Environment=XDG_CURRENT_DESKTOP=Hyprland
+
+[Install]
+WantedBy=graphical-session.target
