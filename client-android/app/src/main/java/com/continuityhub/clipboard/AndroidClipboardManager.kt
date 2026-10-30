@@ -30,6 +30,15 @@ class AndroidClipboardManager(
         handleLocalClipChange()
     }
 
+    @Volatile
+    var isSyncEnabled: Boolean = true
+
+    @Volatile
+    var isOutboundEnabled: Boolean = true
+
+    @Volatile
+    var isInboundEnabled: Boolean = true
+
     init {
         clipboard.addPrimaryClipChangedListener(clipListener)
     }
@@ -55,6 +64,11 @@ class AndroidClipboardManager(
     }
 
     private fun handleLocalClipChange() {
+        if (!isSyncEnabled || !isOutboundEnabled) {
+            Log.d(tag, "Local clip change ignored: Outbound sync is disabled")
+            return
+        }
+
         val clip = try {
             clipboard.primaryClip
         } catch (e: Exception) {
@@ -104,6 +118,11 @@ class AndroidClipboardManager(
     }
 
     fun setRemoteClipboard(payload: ClipboardPayload) {
+        if (!isSyncEnabled || !isInboundEnabled) {
+            Log.d(tag, "Remote clipboard update ignored: Inbound sync is disabled")
+            return
+        }
+
         markSeen(payload.contentHash)
 
         mainHandler.post {

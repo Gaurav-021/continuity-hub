@@ -154,6 +154,30 @@ class ContinuityService : Service() {
         val mediaState = MutableStateFlow(ActiveMediaState())
         val cameraUiState = MutableStateFlow(CameraUiState())
         val sasCodeState = MutableStateFlow("")
+        val clipboardSyncEnabledState = MutableStateFlow(true)
+        val clipboardOutboundEnabledState = MutableStateFlow(true)
+        val clipboardInboundEnabledState = MutableStateFlow(true)
+
+        fun setClipboardSyncEnabled(enabled: Boolean) {
+            clipboardSyncEnabledState.value = enabled
+            instance?.clipboardManager?.isSyncEnabled = enabled
+            instance?.getSharedPreferences("continuity_prefs", Context.MODE_PRIVATE)
+                ?.edit()?.putBoolean("clipboard_sync_enabled", enabled)?.apply()
+        }
+
+        fun setClipboardOutboundEnabled(enabled: Boolean) {
+            clipboardOutboundEnabledState.value = enabled
+            instance?.clipboardManager?.isOutboundEnabled = enabled
+            instance?.getSharedPreferences("continuity_prefs", Context.MODE_PRIVATE)
+                ?.edit()?.putBoolean("clipboard_outbound_enabled", enabled)?.apply()
+        }
+
+        fun setClipboardInboundEnabled(enabled: Boolean) {
+            clipboardInboundEnabledState.value = enabled
+            instance?.clipboardManager?.isInboundEnabled = enabled
+            instance?.getSharedPreferences("continuity_prefs", Context.MODE_PRIVATE)
+                ?.edit()?.putBoolean("clipboard_inbound_enabled", enabled)?.apply()
+        }
 
         fun start(context: Context) {
             val intent = Intent(context, ContinuityService::class.java)
@@ -247,10 +271,20 @@ class ContinuityService : Service() {
         tofuManager = TofuManager(this)
         tlsManager = TlsManager(cryptoManager, tofuManager)
 
+        val clipboardSync = prefs.getBoolean("clipboard_sync_enabled", true)
+        val clipboardOut = prefs.getBoolean("clipboard_outbound_enabled", true)
+        val clipboardIn = prefs.getBoolean("clipboard_inbound_enabled", true)
+        clipboardSyncEnabledState.value = clipboardSync
+        clipboardOutboundEnabledState.value = clipboardOut
+        clipboardInboundEnabledState.value = clipboardIn
+
         clipboardManager = AndroidClipboardManager(this, deviceId) { payload ->
             broadcastClipboard(payload)
             addLog("Android", "Local Copy: ${payload.data.toStringUtf8().take(30)}", payload.contentHash)
         }
+        clipboardManager.isSyncEnabled = clipboardSync
+        clipboardManager.isOutboundEnabled = clipboardOut
+        clipboardManager.isInboundEnabled = clipboardIn
 
         fileTransferManager = AndroidFileTransferManager(this, deviceId, scope)
         scope.launch {

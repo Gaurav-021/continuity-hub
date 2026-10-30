@@ -98,6 +98,7 @@ import androidx.compose.material3.OutlinedCard
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -379,6 +380,9 @@ fun ContinuityApp(
     val notifications by ContinuityService.notificationsState.collectAsState()
     val telemetry by ContinuityService.telemetryState.collectAsState()
     val sasCode by ContinuityService.sasCodeState.collectAsState()
+    val clipboardSyncEnabled by ContinuityService.clipboardSyncEnabledState.collectAsState()
+    val clipboardOutboundEnabled by ContinuityService.clipboardOutboundEnabledState.collectAsState()
+    val clipboardInboundEnabled by ContinuityService.clipboardInboundEnabledState.collectAsState()
 
     val isNotificationListenerEnabled = NotificationManagerCompat
         .getEnabledListenerPackages(context)
@@ -607,7 +611,19 @@ fun ContinuityApp(
                             )
                         }
 
-                        // 4. Permissions Setup Card (ONLY shown if permissions are missing)
+                        // 4. Universal Clipboard (Bidirectional copy & paste) Toggle Card
+                        item {
+                            ClipboardSyncCard(
+                                isSyncEnabled = clipboardSyncEnabled,
+                                isOutboundEnabled = clipboardOutboundEnabled,
+                                isInboundEnabled = clipboardInboundEnabled,
+                                onToggleSync = { ContinuityService.setClipboardSyncEnabled(it) },
+                                onToggleOutbound = { ContinuityService.setClipboardOutboundEnabled(it) },
+                                onToggleInbound = { ContinuityService.setClipboardInboundEnabled(it) }
+                            )
+                        }
+
+                        // 5. Permissions Setup Card (ONLY shown if permissions are missing)
                         if (!isNotificationListenerEnabled || !hasTelephonyPermissions) {
                             item {
                                 SetupPermissionsBanner(
@@ -729,6 +745,8 @@ fun ContinuityApp(
                 deviceConfig = deviceConfig,
                 fingerprint = fingerprint,
                 sasCode = sasCode,
+                isClipboardSyncEnabled = clipboardSyncEnabled,
+                onToggleClipboardSync = { ContinuityService.setClipboardSyncEnabled(it) },
                 onCopyText = onCopyText,
                 onTestCallAlert = onTestCallAlert,
                 onTestSmsAlert = onTestSmsAlert,
@@ -1270,6 +1288,145 @@ fun QuickActionTile(
 }
 
 // -------------------------------------------------------------
+// Component: Universal Clipboard Toggle Card (Bidirectional Sync)
+// -------------------------------------------------------------
+@Composable
+fun ClipboardSyncCard(
+    isSyncEnabled: Boolean,
+    isOutboundEnabled: Boolean,
+    isInboundEnabled: Boolean,
+    onToggleSync: (Boolean) -> Unit,
+    onToggleOutbound: (Boolean) -> Unit,
+    onToggleInbound: (Boolean) -> Unit
+) {
+    var isExpanded by remember { mutableStateOf(false) }
+
+    ElevatedCard(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(20.dp),
+        colors = CardDefaults.elevatedCardColors(
+            containerColor = MaterialTheme.colorScheme.surface
+        ),
+        elevation = CardDefaults.elevatedCardElevation(defaultElevation = 2.dp)
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Surface(
+                    shape = CircleShape,
+                    color = if (isSyncEnabled)
+                        MaterialTheme.colorScheme.primaryContainer
+                    else
+                        MaterialTheme.colorScheme.surfaceVariant,
+                    modifier = Modifier.size(40.dp)
+                ) {
+                    Box(contentAlignment = Alignment.Center) {
+                        Icon(
+                            imageVector = Icons.Default.ContentCopy,
+                            contentDescription = null,
+                            tint = if (isSyncEnabled)
+                                MaterialTheme.colorScheme.onPrimaryContainer
+                            else
+                                MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
+                }
+                Spacer(modifier = Modifier.width(14.dp))
+                Column(
+                    modifier = Modifier
+                        .weight(1f)
+                        .clickable { if (isSyncEnabled) isExpanded = !isExpanded }
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            text = "Universal Clipboard",
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                        if (isSyncEnabled) {
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Icon(
+                                imageVector = if (isExpanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
+                                contentDescription = null,
+                                modifier = Modifier.size(16.dp),
+                                tint = MaterialTheme.colorScheme.outline
+                            )
+                        }
+                    }
+                    Text(
+                        text = if (isSyncEnabled)
+                            "Bidirectional copy & paste active"
+                        else
+                            "Clipboard sync paused",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                Switch(
+                    checked = isSyncEnabled,
+                    onCheckedChange = onToggleSync
+                )
+            }
+
+            AnimatedVisibility(
+                visible = isSyncEnabled && isExpanded,
+                enter = expandVertically() + fadeIn(),
+                exit = shrinkVertically() + fadeOut()
+            ) {
+                Column(modifier = Modifier.padding(top = 12.dp)) {
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.3f))
+                    Spacer(modifier = Modifier.height(10.dp))
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "Send phone copies to PC",
+                                style = MaterialTheme.typography.bodyMedium
+                            )
+                            Text(
+                                text = "Copies on this phone sync to desktop",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.outline
+                            )
+                        }
+                        Switch(
+                            checked = isOutboundEnabled,
+                            onCheckedChange = onToggleOutbound
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "Receive PC copies on phone",
+                                style = MaterialTheme.typography.bodyMedium
+                            )
+                            Text(
+                                text = "Copies on desktop sync to this phone",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.outline
+                            )
+                        }
+                        Switch(
+                            checked = isInboundEnabled,
+                            onCheckedChange = onToggleInbound
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+// -------------------------------------------------------------
 // Component: Setup Permissions Banner (Only shown when missing)
 // -------------------------------------------------------------
 @Composable
@@ -1541,6 +1698,8 @@ fun DiagnosticsBottomSheetContent(
     deviceConfig: DeviceConfig?,
     fingerprint: String,
     sasCode: String,
+    isClipboardSyncEnabled: Boolean,
+    onToggleClipboardSync: (Boolean) -> Unit,
     onCopyText: (String) -> Unit,
     onTestCallAlert: () -> Unit,
     onTestSmsAlert: () -> Unit,
@@ -1561,7 +1720,44 @@ fun DiagnosticsBottomSheetContent(
             fontWeight = FontWeight.Bold
         )
 
-        // 1. Simulation & Testing
+        // 1. Universal Clipboard Master Toggle
+        Text(
+            text = "Clipboard Sync",
+            style = MaterialTheme.typography.labelMedium,
+            fontWeight = FontWeight.SemiBold,
+            color = MaterialTheme.colorScheme.outline
+        )
+        Surface(
+            shape = RoundedCornerShape(14.dp),
+            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp)
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "Universal Clipboard",
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                    Text(
+                        text = "Bidirectional copy & paste sync",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                Switch(
+                    checked = isClipboardSyncEnabled,
+                    onCheckedChange = onToggleClipboardSync
+                )
+            }
+        }
+
+        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+
+        // 2. Simulation & Testing
         Text(
             text = "Simulate Desktop Alerts",
             style = MaterialTheme.typography.labelMedium,
