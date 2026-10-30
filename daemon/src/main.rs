@@ -31,7 +31,7 @@ use transport::tofu::TofuStore;
 use tray::TrayManager;
 
 #[derive(Parser, Debug)]
-#[command(author, version, about = "Continuity Hub Daemon for Linux Wayland")]
+#[command(author, version, about = "Continuity Hub Daemon for Linux & Windows")]
 struct Args {
     /// Custom port to listen and advertise on
     #[arg(short, long)]
@@ -71,7 +71,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let args = Args::parse();
 
     if args.waybar {
-        if let Ok(content) = std::fs::read_to_string("/tmp/continuity-waybar.json") {
+        let telemetry_path = if cfg!(target_os = "linux") {
+            PathBuf::from("/tmp/continuity-waybar.json")
+        } else {
+            std::env::temp_dir().join("continuity-telemetry.json")
+        };
+        if let Ok(content) = std::fs::read_to_string(&telemetry_path) {
             println!("{}", content.trim());
         } else {
             println!(r#"{{"text":"📱 Disconnected","alt":"disconnected","class":"disconnected","percentage":0,"tooltip":"No phone connected"}}"#);

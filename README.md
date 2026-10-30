@@ -5,11 +5,12 @@
 ![Continuity Hub Logo](assets/continuity-hub.svg)
 
 ### High-Performance, Low-Latency Cross-Platform Continuity Engine
-**Bridging Linux (Pure Wayland / Hyprland) & Android (11+ / API 30+)**
+**Bridging Linux (Pure Wayland / Hyprland) & Windows (10/11) with Android (11+ / API 30+)**
 
 [![CI](https://github.com/Gaurav-021/continuity-hub/actions/workflows/ci.yml/badge.svg)](https://github.com/Gaurav-021/continuity-hub/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Platform: Linux Wayland](https://img.shields.io/badge/Platform-Linux%20Pure%20Wayland-brightgreen.svg)](#)
+[![Platform: Windows](https://img.shields.io/badge/Platform-Windows%2010%2F11-0078D6.svg)](WINDOWS.md)
 [![Client: Android 11+](https://img.shields.io/badge/Client-Android%2011%2B%20(API%2030%2B)-success.svg)](#)
 [![Rust: 2021 Edition](https://img.shields.io/badge/Rust-2021%20Edition-orange.svg)](#)
 [![Compose: Material 3](https://img.shields.io/badge/UI-Jetpack%20Compose%20M3-purple.svg)](#)

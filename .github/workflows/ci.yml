@@ -26,7 +26,7 @@ jobs:
             exit 1
           }
 
-  daemon-ci:
+  daemon-linux-ci:
     name: Linux Daemon Quality Gates
     runs-on: ubuntu-latest
     needs: [proto-check]
@@ -60,6 +60,35 @@ jobs:
 
       - name: Cargo Clippy Zero-Warnings Enforcement
         run: cargo clippy -p continuity-daemon --all-targets -- -D warnings
+
+  daemon-windows-ci:
+    name: Windows Daemon Quality Gates
+    runs-on: windows-latest
+    needs: [proto-check]
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Install Protoc
+        uses: arduino/actions-setup-protoc@v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Setup Rust Stable Toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Cache Cargo Dependencies & Build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: daemon -> target
+
+      - name: Cargo Check Windows Targets
+        run: cargo check -p continuity-daemon --all-targets
+
+      - name: Cargo Unit & Integration Tests
+        run: cargo test -p continuity-daemon --all-targets -- --nocapture
 
   android-ci:
     name: Android Client Quality Gates

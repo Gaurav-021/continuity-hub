@@ -6,8 +6,10 @@ pub const V4L2_PIX_FMT_JPEG: u32 = 0x4745504a; // 'J', 'P', 'E', 'G'
 pub const V4L2_BUF_TYPE_VIDEO_OUTPUT: u32 = 2;
 pub const V4L2_FIELD_NONE: u32 = 1;
 pub const V4L2_COLORSPACE_SRGB: u32 = 8;
+#[cfg(target_os = "linux")]
 pub const VIDIOC_S_FMT: libc::c_ulong = 0xc0d05605;
 
+#[cfg(target_os = "linux")]
 #[repr(C)]
 struct V4l2Format {
     type_: u32,
