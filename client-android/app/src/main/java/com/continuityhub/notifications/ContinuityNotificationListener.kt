@@ -31,6 +31,11 @@ class ContinuityNotificationListener : NotificationListenerService() {
         private val cachedActions = ConcurrentHashMap<String, CachedNotificationAction>()
 
         fun executeRemoteAction(request: NotificationActionRequest) {
+            if (!ContinuityService.notificationSyncEnabledState.value ||
+                !ContinuityService.notificationActionsEnabledState.value) {
+                Log.d("ContinuityNotifListener", "Remote notification action ignored: actions disabled")
+                return
+            }
             instance?.handleRemoteAction(request)
         }
     }
@@ -50,6 +55,11 @@ class ContinuityNotificationListener : NotificationListenerService() {
     override fun onNotificationPosted(sbn: StatusBarNotification?) {
         super.onNotificationPosted(sbn)
         if (sbn == null) return
+
+        if (!ContinuityService.notificationSyncEnabledState.value ||
+            !ContinuityService.notificationOutboundEnabledState.value) {
+            return
+        }
 
         val pkg = sbn.packageName
         if (pkg == packageName) return // Ignore own app notifications
@@ -111,6 +121,11 @@ class ContinuityNotificationListener : NotificationListenerService() {
     override fun onNotificationRemoved(sbn: StatusBarNotification?) {
         super.onNotificationRemoved(sbn)
         if (sbn == null) return
+
+        if (!ContinuityService.notificationSyncEnabledState.value ||
+            !ContinuityService.notificationOutboundEnabledState.value) {
+            return
+        }
 
         val notifKey = sbn.key
         cachedActions.remove(notifKey)

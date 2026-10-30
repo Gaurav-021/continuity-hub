@@ -157,6 +157,10 @@ class ContinuityService : Service() {
         val clipboardSyncEnabledState = MutableStateFlow(true)
         val clipboardOutboundEnabledState = MutableStateFlow(true)
         val clipboardInboundEnabledState = MutableStateFlow(true)
+        val notificationSyncEnabledState = MutableStateFlow(true)
+        val notificationOutboundEnabledState = MutableStateFlow(true)
+        val notificationActionsEnabledState = MutableStateFlow(true)
+        val notificationInboundEnabledState = MutableStateFlow(true)
 
         fun setClipboardSyncEnabled(enabled: Boolean) {
             clipboardSyncEnabledState.value = enabled
@@ -177,6 +181,30 @@ class ContinuityService : Service() {
             instance?.clipboardManager?.isInboundEnabled = enabled
             instance?.getSharedPreferences("continuity_prefs", Context.MODE_PRIVATE)
                 ?.edit()?.putBoolean("clipboard_inbound_enabled", enabled)?.apply()
+        }
+
+        fun setNotificationSyncEnabled(enabled: Boolean) {
+            notificationSyncEnabledState.value = enabled
+            instance?.getSharedPreferences("continuity_prefs", Context.MODE_PRIVATE)
+                ?.edit()?.putBoolean("notification_sync_enabled", enabled)?.apply()
+        }
+
+        fun setNotificationOutboundEnabled(enabled: Boolean) {
+            notificationOutboundEnabledState.value = enabled
+            instance?.getSharedPreferences("continuity_prefs", Context.MODE_PRIVATE)
+                ?.edit()?.putBoolean("notification_outbound_enabled", enabled)?.apply()
+        }
+
+        fun setNotificationActionsEnabled(enabled: Boolean) {
+            notificationActionsEnabledState.value = enabled
+            instance?.getSharedPreferences("continuity_prefs", Context.MODE_PRIVATE)
+                ?.edit()?.putBoolean("notification_actions_enabled", enabled)?.apply()
+        }
+
+        fun setNotificationInboundEnabled(enabled: Boolean) {
+            notificationInboundEnabledState.value = enabled
+            instance?.getSharedPreferences("continuity_prefs", Context.MODE_PRIVATE)
+                ?.edit()?.putBoolean("notification_inbound_enabled", enabled)?.apply()
         }
 
         fun start(context: Context) {
@@ -277,6 +305,15 @@ class ContinuityService : Service() {
         clipboardSyncEnabledState.value = clipboardSync
         clipboardOutboundEnabledState.value = clipboardOut
         clipboardInboundEnabledState.value = clipboardIn
+
+        val notifSync = prefs.getBoolean("notification_sync_enabled", true)
+        val notifOut = prefs.getBoolean("notification_outbound_enabled", true)
+        val notifActions = prefs.getBoolean("notification_actions_enabled", true)
+        val notifIn = prefs.getBoolean("notification_inbound_enabled", true)
+        notificationSyncEnabledState.value = notifSync
+        notificationOutboundEnabledState.value = notifOut
+        notificationActionsEnabledState.value = notifActions
+        notificationInboundEnabledState.value = notifIn
 
         clipboardManager = AndroidClipboardManager(this, deviceId) { payload ->
             broadcastClipboard(payload)
@@ -549,23 +586,31 @@ class ContinuityService : Service() {
                         val msg = NotificationMessage.parseFrom(packet.payload)
                         when (msg.msgCase) {
                             NotificationMessage.MsgCase.POST -> {
-                                val post = msg.post
-                                showDesktopAlertNotification(post.title, post.body, post.appName)
-                                addMirroredNotification(
-                                    MirroredNotificationItem(
-                                        notificationId = post.notificationId,
-                                        packageName = post.packageName,
-                                        appName = post.appName,
-                                        title = post.title,
-                                        body = post.body,
-                                        timestamp = post.timestampMs,
-                                        hasQuickReply = false,
-                                        isIncomingFromDesktop = true
+                                if (!notificationSyncEnabledState.value || !notificationInboundEnabledState.value) {
+                                    Log.d(tag, "Desktop notification ignored: Inbound notification sync is disabled")
+                                } else {
+                                    val post = msg.post
+                                    showDesktopAlertNotification(post.title, post.body, post.appName)
+                                    addMirroredNotification(
+                                        MirroredNotificationItem(
+                                            notificationId = post.notificationId,
+                                            packageName = post.packageName,
+                                            appName = post.appName,
+                                            title = post.title,
+                                            body = post.body,
+                                            timestamp = post.timestampMs,
+                                            hasQuickReply = false,
+                                            isIncomingFromDesktop = true
+                                        )
                                     )
-                                )
+                                }
                             }
                             NotificationMessage.MsgCase.ACTION -> {
-                                ContinuityNotificationListener.executeRemoteAction(msg.action)
+                                if (!notificationSyncEnabledState.value || !notificationActionsEnabledState.value) {
+                                    Log.d(tag, "Remote action ignored: Notification actions are disabled")
+                                } else {
+                                    ContinuityNotificationListener.executeRemoteAction(msg.action)
+                                }
                             }
                             else -> {}
                         }
@@ -641,6 +686,11 @@ class ContinuityService : Service() {
     }
 
     private fun broadcastNotificationInternal(payload: NotificationPayload) {
+        if (!notificationSyncEnabledState.value || !notificationOutboundEnabledState.value) {
+            Log.d(tag, "Notification mirroring ignored: Notification outbound sync is disabled")
+            return
+        }
+
         addMirroredNotification(
             MirroredNotificationItem(
                 notificationId = payload.notificationId,
@@ -675,6 +725,10 @@ class ContinuityService : Service() {
     }
 
     private fun broadcastNotificationDismissInternal(dismiss: NotificationDismiss) {
+        if (!notificationSyncEnabledState.value || !notificationOutboundEnabledState.value) {
+            return
+        }
+
         val msg = NotificationMessage.newBuilder().setDismiss(dismiss).build()
         val packet = Packet.newBuilder()
             .setSessionId(deviceConfigState.value?.deviceId ?: "")

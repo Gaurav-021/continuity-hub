@@ -383,6 +383,10 @@ fun ContinuityApp(
     val clipboardSyncEnabled by ContinuityService.clipboardSyncEnabledState.collectAsState()
     val clipboardOutboundEnabled by ContinuityService.clipboardOutboundEnabledState.collectAsState()
     val clipboardInboundEnabled by ContinuityService.clipboardInboundEnabledState.collectAsState()
+    val notificationSyncEnabled by ContinuityService.notificationSyncEnabledState.collectAsState()
+    val notificationOutboundEnabled by ContinuityService.notificationOutboundEnabledState.collectAsState()
+    val notificationActionsEnabled by ContinuityService.notificationActionsEnabledState.collectAsState()
+    val notificationInboundEnabled by ContinuityService.notificationInboundEnabledState.collectAsState()
 
     val isNotificationListenerEnabled = NotificationManagerCompat
         .getEnabledListenerPackages(context)
@@ -623,7 +627,23 @@ fun ContinuityApp(
                             )
                         }
 
-                        // 5. Permissions Setup Card (ONLY shown if permissions are missing)
+                        // 5. Notification Mirroring Toggle Card
+                        item {
+                            NotificationSyncCard(
+                                isSyncEnabled = notificationSyncEnabled,
+                                isOutboundEnabled = notificationOutboundEnabled,
+                                isActionsEnabled = notificationActionsEnabled,
+                                isInboundEnabled = notificationInboundEnabled,
+                                hasListenerPermission = isNotificationListenerEnabled,
+                                onToggleSync = { ContinuityService.setNotificationSyncEnabled(it) },
+                                onToggleOutbound = { ContinuityService.setNotificationOutboundEnabled(it) },
+                                onToggleActions = { ContinuityService.setNotificationActionsEnabled(it) },
+                                onToggleInbound = { ContinuityService.setNotificationInboundEnabled(it) },
+                                onOpenPermissionSettings = onOpenNotificationSettings
+                            )
+                        }
+
+                        // 6. Permissions Setup Card (ONLY shown if permissions are missing)
                         if (!isNotificationListenerEnabled || !hasTelephonyPermissions) {
                             item {
                                 SetupPermissionsBanner(
@@ -635,7 +655,7 @@ fun ContinuityApp(
                             }
                         }
 
-                        // 5. Recent Activity Section Header & Segmented Filter
+                        // 7. Recent Activity Section Header & Segmented Filter
                         item {
                             Column(modifier = Modifier.padding(top = 4.dp)) {
                                 Text(
@@ -746,7 +766,9 @@ fun ContinuityApp(
                 fingerprint = fingerprint,
                 sasCode = sasCode,
                 isClipboardSyncEnabled = clipboardSyncEnabled,
+                isNotificationSyncEnabled = notificationSyncEnabled,
                 onToggleClipboardSync = { ContinuityService.setClipboardSyncEnabled(it) },
+                onToggleNotificationSync = { ContinuityService.setNotificationSyncEnabled(it) },
                 onCopyText = onCopyText,
                 onTestCallAlert = onTestCallAlert,
                 onTestSmsAlert = onTestSmsAlert,
@@ -1427,6 +1449,194 @@ fun ClipboardSyncCard(
 }
 
 // -------------------------------------------------------------
+// Component: Notification Mirroring Toggle Card
+// -------------------------------------------------------------
+@Composable
+fun NotificationSyncCard(
+    isSyncEnabled: Boolean,
+    isOutboundEnabled: Boolean,
+    isActionsEnabled: Boolean,
+    isInboundEnabled: Boolean,
+    hasListenerPermission: Boolean,
+    onToggleSync: (Boolean) -> Unit,
+    onToggleOutbound: (Boolean) -> Unit,
+    onToggleActions: (Boolean) -> Unit,
+    onToggleInbound: (Boolean) -> Unit,
+    onOpenPermissionSettings: () -> Unit
+) {
+    var isExpanded by remember { mutableStateOf(false) }
+
+    ElevatedCard(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(20.dp),
+        colors = CardDefaults.elevatedCardColors(
+            containerColor = MaterialTheme.colorScheme.surface
+        ),
+        elevation = CardDefaults.elevatedCardElevation(defaultElevation = 2.dp)
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Surface(
+                    shape = CircleShape,
+                    color = if (isSyncEnabled && hasListenerPermission)
+                        MaterialTheme.colorScheme.primaryContainer
+                    else
+                        MaterialTheme.colorScheme.surfaceVariant,
+                    modifier = Modifier.size(40.dp)
+                ) {
+                    Box(contentAlignment = Alignment.Center) {
+                        Icon(
+                            imageVector = Icons.Default.Notifications,
+                            contentDescription = null,
+                            tint = if (isSyncEnabled && hasListenerPermission)
+                                MaterialTheme.colorScheme.onPrimaryContainer
+                            else
+                                MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
+                }
+                Spacer(modifier = Modifier.width(14.dp))
+                Column(
+                    modifier = Modifier
+                        .weight(1f)
+                        .clickable { if (isSyncEnabled) isExpanded = !isExpanded }
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            text = "Notification Mirroring",
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                        if (isSyncEnabled) {
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Icon(
+                                imageVector = if (isExpanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
+                                contentDescription = null,
+                                modifier = Modifier.size(16.dp),
+                                tint = MaterialTheme.colorScheme.outline
+                            )
+                        }
+                    }
+                    Text(
+                        text = when {
+                            !isSyncEnabled -> "Notification mirroring paused"
+                            !hasListenerPermission -> "Permission required to mirror alerts"
+                            else -> "Mirroring alerts to PC"
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = if (isSyncEnabled && !hasListenerPermission)
+                            MaterialTheme.colorScheme.error
+                        else
+                            MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                Switch(
+                    checked = isSyncEnabled,
+                    onCheckedChange = onToggleSync
+                )
+            }
+
+            if (isSyncEnabled && !hasListenerPermission) {
+                Spacer(modifier = Modifier.height(10.dp))
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.3f))
+                Spacer(modifier = Modifier.height(6.dp))
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(
+                        text = "Notification access is turned off",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    TextButton(onClick = onOpenPermissionSettings) {
+                        Text("Grant Access")
+                    }
+                }
+            }
+
+            AnimatedVisibility(
+                visible = isSyncEnabled && isExpanded,
+                enter = expandVertically() + fadeIn(),
+                exit = shrinkVertically() + fadeOut()
+            ) {
+                Column(modifier = Modifier.padding(top = 12.dp)) {
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.3f))
+                    Spacer(modifier = Modifier.height(10.dp))
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "Forward phone alerts to PC",
+                                style = MaterialTheme.typography.bodyMedium
+                            )
+                            Text(
+                                text = "Stream incoming app alerts to Linux desktop popups",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.outline
+                            )
+                        }
+                        Switch(
+                            checked = isOutboundEnabled,
+                            onCheckedChange = onToggleOutbound
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "Allow PC actions & quick reply",
+                                style = MaterialTheme.typography.bodyMedium
+                            )
+                            Text(
+                                text = "Dismiss alerts and reply directly from Linux popups",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.outline
+                            )
+                        }
+                        Switch(
+                            checked = isActionsEnabled,
+                            onCheckedChange = onToggleActions
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "Show desktop alerts on phone",
+                                style = MaterialTheme.typography.bodyMedium
+                            )
+                            Text(
+                                text = "Display alerts and messages received from desktop",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.outline
+                            )
+                        }
+                        Switch(
+                            checked = isInboundEnabled,
+                            onCheckedChange = onToggleInbound
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+// -------------------------------------------------------------
 // Component: Setup Permissions Banner (Only shown when missing)
 // -------------------------------------------------------------
 @Composable
@@ -1699,7 +1909,9 @@ fun DiagnosticsBottomSheetContent(
     fingerprint: String,
     sasCode: String,
     isClipboardSyncEnabled: Boolean,
+    isNotificationSyncEnabled: Boolean,
     onToggleClipboardSync: (Boolean) -> Unit,
+    onToggleNotificationSync: (Boolean) -> Unit,
     onCopyText: (String) -> Unit,
     onTestCallAlert: () -> Unit,
     onTestSmsAlert: () -> Unit,
@@ -1720,9 +1932,9 @@ fun DiagnosticsBottomSheetContent(
             fontWeight = FontWeight.Bold
         )
 
-        // 1. Universal Clipboard Master Toggle
+        // 1. Sync & Continuity Controls
         Text(
-            text = "Clipboard Sync",
+            text = "Sync Controls",
             style = MaterialTheme.typography.labelMedium,
             fontWeight = FontWeight.SemiBold,
             color = MaterialTheme.colorScheme.outline
@@ -1732,26 +1944,59 @@ fun DiagnosticsBottomSheetContent(
             color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
             modifier = Modifier.fillMaxWidth()
         ) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp)
-            ) {
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        text = "Universal Clipboard",
-                        style = MaterialTheme.typography.bodyMedium,
-                        fontWeight = FontWeight.SemiBold
-                    )
-                    Text(
-                        text = "Bidirectional copy & paste sync",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+            Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp)) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 4.dp)
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "Universal Clipboard",
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                        Text(
+                            text = "Bidirectional copy & paste sync",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Switch(
+                        checked = isClipboardSyncEnabled,
+                        onCheckedChange = onToggleClipboardSync
                     )
                 }
-                Switch(
-                    checked = isClipboardSyncEnabled,
-                    onCheckedChange = onToggleClipboardSync
+
+                HorizontalDivider(
+                    color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.3f),
+                    modifier = Modifier.padding(vertical = 4.dp)
                 )
+
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 4.dp)
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "Notification Mirroring",
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                        Text(
+                            text = "Mirror phone alerts to desktop",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Switch(
+                        checked = isNotificationSyncEnabled,
+                        onCheckedChange = onToggleNotificationSync
+                    )
+                }
             }
         }
 
