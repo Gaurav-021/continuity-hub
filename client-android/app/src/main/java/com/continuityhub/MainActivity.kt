@@ -17,12 +17,6 @@ import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.core.FastOutSlowInEasing
-import androidx.compose.animation.core.RepeatMode
-import androidx.compose.animation.core.animateFloat
-import androidx.compose.animation.core.infiniteRepeatable
-import androidx.compose.animation.core.rememberInfiniteTransition
-import androidx.compose.animation.core.tween
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -30,7 +24,6 @@ import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.togetherWith
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -45,6 +38,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -53,24 +47,32 @@ import androidx.compose.material.icons.automirrored.filled.HelpOutline
 import androidx.compose.material.icons.automirrored.filled.Message
 import androidx.compose.material.icons.automirrored.filled.OpenInNew
 import androidx.compose.material.icons.filled.BatteryChargingFull
-import androidx.compose.material.icons.filled.Cable
+import androidx.compose.material.icons.filled.BatteryFull
 import androidx.compose.material.icons.filled.Call
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Computer
 import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.DesktopWindows
 import androidx.compose.material.icons.filled.Devices
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Error
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
+import androidx.compose.material.icons.filled.Laptop
 import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.Notifications
-import androidx.compose.material.icons.filled.NotificationsActive
 import androidx.compose.material.icons.filled.Security
+import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.material.icons.filled.TouchApp
+import androidx.compose.material.icons.filled.Tune
+import androidx.compose.material.icons.filled.Tv
 import androidx.compose.material.icons.filled.Upload
 import androidx.compose.material.icons.filled.UploadFile
+import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material.icons.filled.Wifi
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Badge
@@ -81,10 +83,14 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ElevatedCard
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilterChipDefaults
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.OutlinedButton
@@ -96,6 +102,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -106,13 +113,14 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.material.icons.filled.MusicNote
-import androidx.compose.material.icons.filled.Videocam
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
@@ -304,6 +312,51 @@ class MainActivity : ComponentActivity() {
     }
 }
 
+// Sealed model for unified activity stream
+sealed interface ActivityFeedItem {
+    val id: String
+    val timestamp: Long
+
+    data class FileTransfer(val item: FileTransferItem) : ActivityFeedItem {
+        override val id: String get() = item.transferId
+        override val timestamp: Long get() = item.timestamp
+    }
+
+    data class Clipboard(val log: ClipboardLog) : ActivityFeedItem {
+        override val id: String get() = log.hash
+        override val timestamp: Long get() = log.timestamp
+    }
+
+    data class Notification(val notif: MirroredNotificationItem) : ActivityFeedItem {
+        override val id: String get() = notif.notificationId
+        override val timestamp: Long get() = notif.timestamp
+    }
+}
+
+enum class ActivityFilter(val label: String) {
+    ALL("All"),
+    FILES("Files"),
+    CLIPBOARD("Clipboard"),
+    NOTIFICATIONS("Notifications")
+}
+
+fun formatRelativeTime(timestamp: Long): String {
+    val now = System.currentTimeMillis()
+    val diff = (now - timestamp).coerceAtLeast(0)
+    val seconds = diff / 1000
+    val minutes = seconds / 60
+    val hours = minutes / 60
+    val days = hours / 24
+
+    return when {
+        seconds < 45 -> "Just now"
+        minutes < 60 -> "${minutes}m ago"
+        hours < 24 -> "${hours}h ago"
+        days < 7 -> "${days}d ago"
+        else -> SimpleDateFormat("MMM d, h:mm a", Locale.getDefault()).format(Date(timestamp))
+    }
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ContinuityApp(
@@ -331,8 +384,19 @@ fun ContinuityApp(
         .getEnabledListenerPackages(context)
         .contains(context.packageName)
 
+    val hasTelephonyPermissions = ContextCompat.checkSelfPermission(
+        context,
+        Manifest.permission.READ_PHONE_STATE
+    ) == PackageManager.PERMISSION_GRANTED &&
+        ContextCompat.checkSelfPermission(
+            context,
+            Manifest.permission.RECEIVE_SMS
+        ) == PackageManager.PERMISSION_GRANTED
+
     var selectedTab by remember { mutableIntStateOf(0) }
+    var selectedActivityFilter by remember { mutableStateOf(ActivityFilter.ALL) }
     var showDirectConnectDialog by remember { mutableStateOf(false) }
+    var showDiagnosticsSheet by remember { mutableStateOf(false) }
     var directConnectHost by remember { mutableStateOf("127.0.0.1") }
     var directConnectPort by remember { mutableStateOf("52800") }
 
@@ -342,18 +406,22 @@ fun ContinuityApp(
         uri?.let { onSendFileUri(it) }
     }
 
+    val isConnected = connectedPeers.isNotEmpty()
+    val peerDisplayName = connectedPeers.firstOrNull() ?: "Desktop"
+
     Scaffold(
         topBar = {
             TopAppBar(
                 title = {
                     Text(
                         text = when (selectedTab) {
-                            1 -> "Remote Trackpad"
-                            2 -> "Multimedia Sync"
-                            3 -> "Continuity Camera"
-                            else -> "Continuity Hub"
+                            1 -> "Trackpad"
+                            2 -> "Media"
+                            3 -> "Camera & Display"
+                            else -> "Continuity"
                         },
-                        style = MaterialTheme.typography.titleLarge
+                        style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.SemiBold
                     )
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
@@ -361,37 +429,39 @@ fun ContinuityApp(
                     titleContentColor = MaterialTheme.colorScheme.onSurface
                 ),
                 actions = {
-                    Surface(
-                        shape = RoundedCornerShape(16.dp),
-                        color = if (connectedPeers.isNotEmpty())
-                            MaterialTheme.colorScheme.primaryContainer
-                        else
-                            MaterialTheme.colorScheme.surfaceVariant,
-                        modifier = Modifier.padding(end = 16.dp)
-                    ) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
+                    // Discreet connection status dot
+                    if (isConnected) {
+                        Surface(
+                            shape = RoundedCornerShape(12.dp),
+                            color = MaterialTheme.colorScheme.surfaceVariant,
+                            modifier = Modifier.padding(end = 6.dp)
                         ) {
-                            Box(
-                                modifier = Modifier
-                                    .size(8.dp)
-                                    .background(
-                                        if (connectedPeers.isNotEmpty()) Color(0xFF10B981) else Color(0xFFF59E0B),
-                                        shape = CircleShape
-                                    )
-                            )
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text(
-                                text = if (sasCode.isNotEmpty()) "SAS: $sasCode" else if (connectedPeers.isNotEmpty()) "Connected" else "Discovering",
-                                style = MaterialTheme.typography.labelSmall,
-                                fontWeight = FontWeight.Bold,
-                                color = if (connectedPeers.isNotEmpty())
-                                    MaterialTheme.colorScheme.onPrimaryContainer
-                                else
-                                    MaterialTheme.colorScheme.onSurfaceVariant
-                            )
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(7.dp)
+                                        .background(Color(0xFF10B981), shape = CircleShape)
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = "Connected",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
                         }
+                    }
+
+                    // Settings & Diagnostics Tool Button
+                    IconButton(onClick = { showDiagnosticsSheet = true }) {
+                        Icon(
+                            imageVector = Icons.Default.Tune,
+                            contentDescription = "Settings & Diagnostics",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
                     }
                 }
             )
@@ -399,13 +469,13 @@ fun ContinuityApp(
         bottomBar = {
             NavigationBar(
                 containerColor = MaterialTheme.colorScheme.surface,
-                tonalElevation = 3.dp
+                tonalElevation = 2.dp
             ) {
                 NavigationBarItem(
                     icon = {
                         BadgedBox(
                             badge = {
-                                if (connectedPeers.isNotEmpty()) {
+                                if (isConnected) {
                                     Badge(containerColor = MaterialTheme.colorScheme.primary)
                                 }
                             }
@@ -454,354 +524,249 @@ fun ContinuityApp(
             when (tab) {
                 1 -> {
                     TrackpadScreen(
-                        isConnected = connectedPeers.isNotEmpty(),
+                        isConnected = isConnected,
                         modifier = Modifier.padding(padding)
                     )
                 }
                 2 -> {
                     MediaScreen(
-                        isConnected = connectedPeers.isNotEmpty(),
+                        isConnected = isConnected,
                         modifier = Modifier.padding(padding)
                     )
                 }
                 3 -> {
                     CameraScreen(
-                        isConnected = connectedPeers.isNotEmpty(),
+                        isConnected = isConnected,
                         modifier = Modifier.padding(padding)
                     )
                 }
                 else -> {
-                LazyColumn(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(padding)
-                        .padding(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(16.dp)
-                ) {
-            // 1. Connection Status: Getting Started Guide OR Connected Hero Card
-            if (connectedPeers.isEmpty()) {
-                item {
-                    GettingStartedCard(
-                        onCopyCommand = onCopyText,
-                        onDirectConnectClick = { showDirectConnectDialog = true }
-                    )
-                }
-            } else {
-                item {
-                    ConnectedHeroCard(
-                        peerName = connectedPeers.joinToString(", "),
-                        sasCode = sasCode,
-                        onNavigateTab = { selectedTab = it },
-                        onSendFile = { filePickerLauncher.launch("*/*") }
-                    )
-                }
-            }
+                    // Unified chronological activity stream
+                    val allActivities = remember(fileTransfers, clipboardLogs, notifications) {
+                        val list = mutableListOf<ActivityFeedItem>()
+                        fileTransfers.forEach { list.add(ActivityFeedItem.FileTransfer(it)) }
+                        clipboardLogs.forEach { list.add(ActivityFeedItem.Clipboard(it)) }
+                        notifications.forEach { list.add(ActivityFeedItem.Notification(it)) }
+                        list.sortedByDescending { it.timestamp }
+                    }
 
-            // 2. Discovered LAN Peers (if any broadcasting peers found or multiple sessions)
-            if (discoveredPeers.isNotEmpty() || connectedPeers.size > 1) {
-                item {
-                    PeerConnectionsCard(
-                        connectedPeers = connectedPeers,
-                        discoveredPeers = discoveredPeers,
-                        onConnectToPeer = { peer ->
-                            ContinuityService.connectDirect(peer.host, peer.port)
-                        },
-                        onOpenDirectConnect = { showDirectConnectDialog = true }
-                    )
-                }
-            }
-
-            // 3. Advanced Cryptographic Identity (Expandable)
-            item {
-                TechnicalIdentityCard(
-                    deviceConfig = deviceConfig,
-                    fingerprint = fingerprint,
-                    onCopyText = onCopyText,
-                    onOpenDirectConnect = { showDirectConnectDialog = true }
-                )
-            }
-
-            // 3. Telemetry & Cellular Status Card
-            item {
-                ElevatedCard(
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(20.dp),
-                    colors = CardDefaults.elevatedCardColors(containerColor = MaterialTheme.colorScheme.surface),
-                    elevation = CardDefaults.elevatedCardElevation(defaultElevation = 2.dp)
-                ) {
-                    Column(modifier = Modifier.padding(18.dp)) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Surface(
-                                shape = CircleShape,
-                                color = MaterialTheme.colorScheme.tertiaryContainer,
-                                modifier = Modifier.size(40.dp)
-                            ) {
-                                Box(contentAlignment = Alignment.Center) {
-                                    Icon(
-                                        Icons.Default.BatteryChargingFull,
-                                        contentDescription = null,
-                                        tint = MaterialTheme.colorScheme.onTertiaryContainer,
-                                        modifier = Modifier.size(22.dp)
-                                    )
-                                }
-                            }
-                            Spacer(modifier = Modifier.width(12.dp))
-                            Text(
-                                text = "Device Health & Telemetry",
-                                style = MaterialTheme.typography.titleMedium
-                            )
-                        }
-                        Spacer(modifier = Modifier.height(14.dp))
-
-                        val batteryPct = telemetry?.batteryPercentage ?: 85
-                        val isCharging = telemetry?.isCharging ?: false
-                        val temp = telemetry?.batteryTemperatureC ?: 29.5f
-                        val wifi = telemetry?.wifiSsid?.takeIf { it.isNotEmpty() } ?: "Connected"
-                        val carrier = telemetry?.cellularCarrier?.takeIf { it.isNotEmpty() } ?: "Cellular"
-
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Column {
-                                Text(
-                                    text = "Battery: $batteryPct% ${if (isCharging) "⚡ Charging" else "Discharging"}",
-                                    style = MaterialTheme.typography.titleSmall
-                                )
-                                Text(
-                                    text = "Temp: ${String.format("%.1f", temp)}°C  •  Wi-Fi: $wifi  •  Carrier: $carrier",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.outline
-                                )
-                            }
-                        }
-
-                        Spacer(modifier = Modifier.height(14.dp))
-
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            FilledTonalButton(
-                                onClick = onTestCallAlert,
-                                shape = RoundedCornerShape(12.dp),
-                                modifier = Modifier.weight(1f)
-                            ) {
-                                Icon(Icons.Default.Call, contentDescription = null, modifier = Modifier.size(16.dp))
-                                Spacer(modifier = Modifier.width(6.dp))
-                                Text("Test Call")
-                            }
-
-                            FilledTonalButton(
-                                onClick = onTestSmsAlert,
-                                shape = RoundedCornerShape(12.dp),
-                                modifier = Modifier.weight(1f)
-                            ) {
-                                Icon(Icons.AutoMirrored.Filled.Message, contentDescription = null, modifier = Modifier.size(16.dp))
-                                Spacer(modifier = Modifier.width(6.dp))
-                                Text("Test SMS")
-                            }
-                        }
-
-                        Spacer(modifier = Modifier.height(8.dp))
-                        OutlinedButton(
-                            onClick = onRequestTelephonyPermissions,
-                            shape = RoundedCornerShape(12.dp),
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Text("Grant Phone & SMS Permissions")
+                    val filteredActivities = remember(allActivities, selectedActivityFilter) {
+                        when (selectedActivityFilter) {
+                            ActivityFilter.ALL -> allActivities
+                            ActivityFilter.FILES -> allActivities.filterIsInstance<ActivityFeedItem.FileTransfer>()
+                            ActivityFilter.CLIPBOARD -> allActivities.filterIsInstance<ActivityFeedItem.Clipboard>()
+                            ActivityFilter.NOTIFICATIONS -> allActivities.filterIsInstance<ActivityFeedItem.Notification>()
                         }
                     }
-                }
-            }
 
-            // 4. Notification Mirroring Status Card
-            item {
-                ElevatedCard(
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(20.dp),
-                    colors = CardDefaults.elevatedCardColors(
-                        containerColor = if (isNotificationListenerEnabled)
-                            MaterialTheme.colorScheme.surface
-                        else
-                            MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.35f)
-                    ),
-                    elevation = CardDefaults.elevatedCardElevation(defaultElevation = 2.dp)
-                ) {
-                    Column(modifier = Modifier.padding(18.dp)) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Surface(
-                                shape = CircleShape,
-                                color = if (isNotificationListenerEnabled)
-                                    MaterialTheme.colorScheme.primaryContainer
-                                else
-                                    MaterialTheme.colorScheme.errorContainer,
-                                modifier = Modifier.size(40.dp)
-                            ) {
-                                Box(contentAlignment = Alignment.Center) {
-                                    Icon(
-                                        imageVector = if (isNotificationListenerEnabled) Icons.Default.NotificationsActive else Icons.Default.Notifications,
-                                        contentDescription = null,
-                                        tint = if (isNotificationListenerEnabled)
-                                            MaterialTheme.colorScheme.onPrimaryContainer
-                                        else
-                                            MaterialTheme.colorScheme.onErrorContainer,
-                                        modifier = Modifier.size(22.dp)
-                                    )
-                                }
+                    LazyColumn(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(padding)
+                            .padding(horizontal = 16.dp),
+                        verticalArrangement = Arrangement.spacedBy(14.dp)
+                    ) {
+                        item {
+                            Spacer(modifier = Modifier.height(2.dp))
+                        }
+
+                        // 1. Primary Device Card (Connected vs Disconnected)
+                        item {
+                            if (isConnected) {
+                                ConnectedDeviceCard(
+                                    peerName = peerDisplayName,
+                                    sasCode = sasCode,
+                                    telemetry = telemetry
+                                )
+                            } else {
+                                DisconnectedDeviceCard(
+                                    onCopyCommand = onCopyText,
+                                    onDirectConnect = { showDirectConnectDialog = true }
+                                )
                             }
-                            Spacer(modifier = Modifier.width(12.dp))
-                            Text(
-                                text = "Notification Mirroring",
-                                style = MaterialTheme.typography.titleMedium
+                        }
+
+                        // 2. Discovered LAN Peers (if any extra peers found)
+                        if (discoveredPeers.isNotEmpty() && (!isConnected || discoveredPeers.size > 1)) {
+                            item {
+                                DiscoveredPeersCard(
+                                    discoveredPeers = discoveredPeers,
+                                    onConnectPeer = { peer ->
+                                        ContinuityService.connectDirect(peer.host, peer.port)
+                                    }
+                                )
+                            }
+                        }
+
+                        // 3. Clean Quick Action Tiles (Files, Trackpad, Sidecar, Media)
+                        item {
+                            QuickActionsGrid(
+                                isConnected = isConnected,
+                                onSendFile = { filePickerLauncher.launch("*/*") },
+                                onNavigateTab = { selectedTab = it }
                             )
                         }
-                        Spacer(modifier = Modifier.height(10.dp))
-                        Text(
-                            text = if (isNotificationListenerEnabled)
-                                "Phone notifications are mirrored seamlessly to desktop with quick replies & actions."
-                            else
-                                "Notification access permission required to mirror notifications to desktop.",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = if (isNotificationListenerEnabled)
-                                MaterialTheme.colorScheme.onSurfaceVariant
-                            else
-                                MaterialTheme.colorScheme.error
-                        )
-                        Spacer(modifier = Modifier.height(12.dp))
-                        if (!isNotificationListenerEnabled) {
-                            Button(
-                                onClick = onOpenNotificationSettings,
-                                shape = RoundedCornerShape(12.dp),
-                                modifier = Modifier.fillMaxWidth()
-                            ) {
-                                Text("Grant Notification Access")
+
+                        // 4. Permissions Setup Card (ONLY shown if permissions are missing)
+                        if (!isNotificationListenerEnabled || !hasTelephonyPermissions) {
+                            item {
+                                SetupPermissionsBanner(
+                                    needsNotification = !isNotificationListenerEnabled,
+                                    needsTelephony = !hasTelephonyPermissions,
+                                    onOpenNotificationSettings = onOpenNotificationSettings,
+                                    onRequestTelephonyPermissions = onRequestTelephonyPermissions
+                                )
+                            }
+                        }
+
+                        // 5. Recent Activity Section Header & Segmented Filter
+                        item {
+                            Column(modifier = Modifier.padding(top = 4.dp)) {
+                                Text(
+                                    text = "Recent Activity",
+                                    style = MaterialTheme.typography.titleMedium,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+                                Spacer(modifier = Modifier.height(8.dp))
+                                LazyRow(
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    items(ActivityFilter.entries) { filter ->
+                                        FilterChip(
+                                            selected = selectedActivityFilter == filter,
+                                            onClick = { selectedActivityFilter = filter },
+                                            label = { Text(filter.label) },
+                                            leadingIcon = if (selectedActivityFilter == filter) {
+                                                { Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(16.dp)) }
+                                            } else null,
+                                            colors = FilterChipDefaults.filterChipColors(
+                                                selectedContainerColor = MaterialTheme.colorScheme.secondaryContainer,
+                                                selectedLabelColor = MaterialTheme.colorScheme.onSecondaryContainer
+                                            )
+                                        )
+                                    }
+                                }
+                            }
+                        }
+
+                        // 6. Filtered Activity Items
+                        if (filteredActivities.isEmpty()) {
+                            item {
+                                Card(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    colors = CardDefaults.cardColors(
+                                        containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f)
+                                    ),
+                                    shape = RoundedCornerShape(16.dp)
+                                ) {
+                                    Column(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(vertical = 28.dp, horizontal = 20.dp),
+                                        horizontalAlignment = Alignment.CenterHorizontally
+                                    ) {
+                                        Text(
+                                            text = when (selectedActivityFilter) {
+                                                ActivityFilter.FILES -> "No file transfers yet"
+                                                ActivityFilter.CLIPBOARD -> "No clipboard history synced yet"
+                                                ActivityFilter.NOTIFICATIONS -> "No notifications mirrored yet"
+                                                ActivityFilter.ALL -> "No recent activity yet"
+                                            },
+                                            style = MaterialTheme.typography.bodyMedium,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                        Spacer(modifier = Modifier.height(4.dp))
+                                        Text(
+                                            text = when (selectedActivityFilter) {
+                                                ActivityFilter.FILES -> "Use 'Send File' to drop photos or documents to your PC"
+                                                ActivityFilter.CLIPBOARD -> "Copy text on your phone or PC to test instant sync"
+                                                ActivityFilter.NOTIFICATIONS -> "Incoming notifications will appear here"
+                                                ActivityFilter.ALL -> "Files, clipboard clips, and notifications will show here"
+                                            },
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.outline,
+                                            textAlign = TextAlign.Center
+                                        )
+                                    }
+                                }
                             }
                         } else {
-                            OutlinedButton(
-                                onClick = onSendTestAlert,
-                                shape = RoundedCornerShape(12.dp),
-                                modifier = Modifier.fillMaxWidth()
-                            ) {
-                                Text("Send Test Alert to Desktop")
+                            items(filteredActivities, key = { it.id }) { item ->
+                                when (item) {
+                                    is ActivityFeedItem.FileTransfer -> {
+                                        ActivityFileCard(item.item, onOpenFile)
+                                    }
+                                    is ActivityFeedItem.Clipboard -> {
+                                        ActivityClipboardCard(item.log, onCopyText)
+                                    }
+                                    is ActivityFeedItem.Notification -> {
+                                        ActivityNotificationCard(item.notif)
+                                    }
+                                }
                             }
+                        }
+
+                        item {
+                            Spacer(modifier = Modifier.height(16.dp))
                         }
                     }
                 }
             }
-
-            // 5. Actions: File Drop & Test Sync
-            item {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
-                    Button(
-                        onClick = { filePickerLauncher.launch("*/*") },
-                        shape = RoundedCornerShape(16.dp),
-                        modifier = Modifier.weight(1f)
-                    ) {
-                        Icon(Icons.Default.UploadFile, contentDescription = null, modifier = Modifier.size(18.dp))
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text("Send File Drop")
-                    }
-
-                    FilledTonalButton(
-                        onClick = {
-                            val testText = "Continuity Test: " + SimpleDateFormat("HH:mm:ss", Locale.US).format(Date())
-                            onCopyText(testText)
-                        },
-                        shape = RoundedCornerShape(16.dp),
-                        modifier = Modifier.weight(1f)
-                    ) {
-                        Icon(Icons.Default.Sync, contentDescription = null, modifier = Modifier.size(18.dp))
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text("Test Clipboard")
-                    }
-                }
-            }
-
-            // 5. File Transfers Section
-            if (fileTransfers.isNotEmpty()) {
-                item {
-                    Text(
-                        text = "File Transfers (Drop / Received)",
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 16.sp,
-                        color = MaterialTheme.colorScheme.primary
-                    )
-                }
-
-                items(fileTransfers) { transfer ->
-                    FileTransferCard(transfer, onOpenFile)
-                }
-            }
-
-            // 6. Mirrored Notifications Section
-            if (notifications.isNotEmpty()) {
-                item {
-                    Text(
-                        text = "Mirrored Notifications",
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 16.sp,
-                        color = MaterialTheme.colorScheme.primary
-                    )
-                }
-
-                items(notifications) { notif ->
-                    NotificationCard(notif)
-                }
-            }
-
-            // 7. Live Clipboard Log Header
-            item {
-                Text(
-                    text = "Live Clipboard Synchronization Log",
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 16.sp,
-                    color = MaterialTheme.colorScheme.primary
-                )
-            }
-
-            // 8. Clipboard Sync Log Items
-            if (clipboardLogs.isEmpty()) {
-                item {
-                    Text(
-                        "No clipboard events synced yet. Copy text on your phone or desktop to test sub-10ms synchronization.",
-                        fontSize = 13.sp,
-                        color = Color.Gray
-                    )
-                }
-            } else {
-                items(clipboardLogs) { log ->
-                    ClipboardLogItem(log, onCopyText)
-                }
-            }
-        }
-            }
-        }
         }
     }
 
+    // Modal Bottom Sheet for Diagnostics, Testing & Security Details
+    if (showDiagnosticsSheet) {
+        val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+        ModalBottomSheet(
+            onDismissRequest = { showDiagnosticsSheet = false },
+            sheetState = sheetState,
+            containerColor = MaterialTheme.colorScheme.surface
+        ) {
+            DiagnosticsBottomSheetContent(
+                deviceConfig = deviceConfig,
+                fingerprint = fingerprint,
+                sasCode = sasCode,
+                onCopyText = onCopyText,
+                onTestCallAlert = onTestCallAlert,
+                onTestSmsAlert = onTestSmsAlert,
+                onSendTestAlert = onSendTestAlert,
+                onTestClipboard = {
+                    val testText = "Continuity Test: " + SimpleDateFormat("HH:mm:ss", Locale.US).format(Date())
+                    onCopyText(testText)
+                },
+                onOpenDirectConnect = {
+                    showDiagnosticsSheet = false
+                    showDirectConnectDialog = true
+                }
+            )
+        }
+    }
+
+    // Direct Connect Dialog
     if (showDirectConnectDialog) {
         AlertDialog(
             onDismissRequest = { showDirectConnectDialog = false },
-            title = { Text("Manual Direct Connection") },
+            title = { Text("Direct Connection (USB / IP)") },
             text = {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("Enter Linux desktop IP address or localhost (for adb reverse):", fontSize = 13.sp)
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text(
+                        "Connect to Linux PC over local IP address or USB cable port forwarding (adb reverse):",
+                        style = MaterialTheme.typography.bodyMedium
+                    )
                     OutlinedTextField(
                         value = directConnectHost,
                         onValueChange = { directConnectHost = it },
-                        label = { Text("IP Address / Host") },
+                        label = { Text("IP Address or Host") },
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth()
                     )
                     OutlinedTextField(
                         value = directConnectPort,
                         onValueChange = { directConnectPort = it },
-                        label = { Text("Daemon Port") },
+                        label = { Text("Port (Default: 52800)") },
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth()
                     )
@@ -827,60 +792,579 @@ fun ContinuityApp(
     }
 }
 
+// -------------------------------------------------------------
+// Component: Connected Device Card (Google Material You style)
+// -------------------------------------------------------------
 @Composable
-fun NotificationCard(item: MirroredNotificationItem) {
-    val timeStr = SimpleDateFormat("HH:mm:ss", Locale.US).format(Date(item.timestamp))
+fun ConnectedDeviceCard(
+    peerName: String,
+    sasCode: String,
+    telemetry: com.continuityhub.proto.DeviceTelemetry?
+) {
+    ElevatedCard(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(24.dp),
+        colors = CardDefaults.elevatedCardColors(
+            containerColor = MaterialTheme.colorScheme.surface
+        ),
+        elevation = CardDefaults.elevatedCardElevation(defaultElevation = 2.dp)
+    ) {
+        Column(modifier = Modifier.padding(20.dp)) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Surface(
+                    shape = CircleShape,
+                    color = MaterialTheme.colorScheme.primaryContainer,
+                    modifier = Modifier.size(48.dp)
+                ) {
+                    Box(contentAlignment = Alignment.Center) {
+                        Icon(
+                            imageVector = Icons.Default.Laptop,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                            modifier = Modifier.size(26.dp)
+                        )
+                    }
+                }
+                Spacer(modifier = Modifier.width(14.dp))
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = peerName,
+                        style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Box(
+                            modifier = Modifier
+                                .size(7.dp)
+                                .background(Color(0xFF10B981), shape = CircleShape)
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(
+                            text = "Connected · Local Network",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            }
 
+            // Real-time battery & network telemetry line
+            if (telemetry != null) {
+                Spacer(modifier = Modifier.height(14.dp))
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
+                Spacer(modifier = Modifier.height(12.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            imageVector = if (telemetry.isCharging) Icons.Default.BatteryChargingFull else Icons.Default.BatteryFull,
+                            contentDescription = null,
+                            modifier = Modifier.size(16.dp),
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(
+                            text = "${telemetry.batteryPercentage}%${if (telemetry.isCharging) " (Charging)" else ""}",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    if (telemetry.wifiSsid.isNotEmpty()) {
+                        Text(
+                            text = "Wi-Fi: ${telemetry.wifiSsid}",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Text(
+                        text = "${String.format(Locale.US, "%.1f", telemetry.batteryTemperatureC)}°C",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+
+            // Verification code strip (calm Google security verification)
+            if (sasCode.isNotEmpty()) {
+                Spacer(modifier = Modifier.height(14.dp))
+                Surface(
+                    shape = RoundedCornerShape(12.dp),
+                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Security,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(20.dp)
+                        )
+                        Spacer(modifier = Modifier.width(10.dp))
+                        Text(
+                            text = "Security Code:",
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.Medium
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = sasCode,
+                            style = MaterialTheme.typography.bodyLarge,
+                            fontWeight = FontWeight.Bold,
+                            fontFamily = FontFamily.Monospace,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                        Spacer(modifier = Modifier.weight(1f))
+                        Text(
+                            text = "Matches PC",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.outline
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+// -------------------------------------------------------------
+// Component: Disconnected Device Card
+// -------------------------------------------------------------
+@Composable
+fun DisconnectedDeviceCard(
+    onCopyCommand: (String) -> Unit,
+    onDirectConnect: () -> Unit
+) {
+    var isGuideExpanded by remember { mutableStateOf(false) }
+
+    ElevatedCard(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(24.dp),
+        colors = CardDefaults.elevatedCardColors(
+            containerColor = MaterialTheme.colorScheme.surface
+        ),
+        elevation = CardDefaults.elevatedCardElevation(defaultElevation = 2.dp)
+    ) {
+        Column(
+            modifier = Modifier.padding(22.dp)
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Surface(
+                    shape = CircleShape,
+                    color = MaterialTheme.colorScheme.secondaryContainer,
+                    modifier = Modifier.size(46.dp)
+                ) {
+                    Box(contentAlignment = Alignment.Center) {
+                        Icon(
+                            imageVector = Icons.Default.Devices,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onSecondaryContainer,
+                            modifier = Modifier.size(24.dp)
+                        )
+                    }
+                }
+                Spacer(modifier = Modifier.width(14.dp))
+                Column {
+                    Text(
+                        text = "Looking for your computer...",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                    Text(
+                        text = "Ensure both devices are on the same Wi-Fi",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            // Clean terminal command chip
+            Surface(
+                shape = RoundedCornerShape(12.dp),
+                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Terminal,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Spacer(modifier = Modifier.width(10.dp))
+                    Text(
+                        text = "continuity-daemon",
+                        fontFamily = FontFamily.Monospace,
+                        fontWeight = FontWeight.SemiBold,
+                        fontSize = 13.sp,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        modifier = Modifier.weight(1f)
+                    )
+                    IconButton(
+                        onClick = { onCopyCommand("continuity-daemon") },
+                        modifier = Modifier.size(28.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.ContentCopy,
+                            contentDescription = "Copy command",
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(16.dp)
+                        )
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(14.dp))
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                FilledTonalButton(
+                    onClick = onDirectConnect,
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Icon(Icons.Default.Sync, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text("Direct Connect")
+                }
+
+                OutlinedButton(
+                    onClick = { isGuideExpanded = !isGuideExpanded },
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Icon(Icons.AutoMirrored.Filled.HelpOutline, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(if (isGuideExpanded) "Hide Tips" else "Connection Tips")
+                }
+            }
+
+            AnimatedVisibility(
+                visible = isGuideExpanded,
+                enter = expandVertically() + fadeIn(),
+                exit = shrinkVertically() + fadeOut()
+            ) {
+                Column(modifier = Modifier.padding(top = 14.dp)) {
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Text(
+                        text = "Fast USB Cable Connection:",
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Text(
+                        text = "Plug in USB and forward ports: 'adb reverse tcp:52800 tcp:52800'",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = "Firewall (UFW / Firewalld):",
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Text(
+                        text = "Allow ports 52800 and 52801: 'sudo ufw allow 52800:52801/tcp'",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+        }
+    }
+}
+
+// -------------------------------------------------------------
+// Component: Discovered Peers Card
+// -------------------------------------------------------------
+@Composable
+fun DiscoveredPeersCard(
+    discoveredPeers: List<DiscoveredPeer>,
+    onConnectPeer: (DiscoveredPeer) -> Unit
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(20.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Text(
+                text = "Available Devices on Network",
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.SemiBold
+            )
+            Spacer(modifier = Modifier.height(10.dp))
+            discoveredPeers.forEach { peer ->
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 4.dp)
+                ) {
+                    Icon(
+                        Icons.Default.Computer,
+                        contentDescription = null,
+                        modifier = Modifier.size(22.dp),
+                        tint = MaterialTheme.colorScheme.primary
+                    )
+                    Spacer(modifier = Modifier.width(10.dp))
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(peer.deviceName, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
+                        Text("${peer.host}:${peer.port}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline)
+                    }
+                    Button(
+                        onClick = { onConnectPeer(peer) },
+                        shape = RoundedCornerShape(10.dp)
+                    ) {
+                        Text("Connect", fontSize = 12.sp)
+                    }
+                }
+            }
+        }
+    }
+}
+
+// -------------------------------------------------------------
+// Component: Quick Actions 2x2 Grid (Google Quick Settings style)
+// -------------------------------------------------------------
+@Composable
+fun QuickActionsGrid(
+    isConnected: Boolean,
+    onSendFile: () -> Unit,
+    onNavigateTab: (Int) -> Unit
+) {
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            QuickActionTile(
+                title = "Send Files",
+                subtitle = "Drop to desktop",
+                icon = Icons.Default.UploadFile,
+                isPrimary = true,
+                modifier = Modifier.weight(1f),
+                onClick = onSendFile
+            )
+            QuickActionTile(
+                title = "Trackpad",
+                subtitle = "Cursor & keyboard",
+                icon = Icons.Default.TouchApp,
+                isPrimary = false,
+                modifier = Modifier.weight(1f),
+                onClick = { onNavigateTab(1) }
+            )
+        }
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            QuickActionTile(
+                title = "Sidecar Display",
+                subtitle = "Extend PC screen",
+                icon = Icons.Default.Tv,
+                isPrimary = false,
+                modifier = Modifier.weight(1f),
+                onClick = { onNavigateTab(3) }
+            )
+            QuickActionTile(
+                title = "Media Remote",
+                subtitle = "Sync & controls",
+                icon = Icons.Default.MusicNote,
+                isPrimary = false,
+                modifier = Modifier.weight(1f),
+                onClick = { onNavigateTab(2) }
+            )
+        }
+    }
+}
+
+@Composable
+fun QuickActionTile(
+    title: String,
+    subtitle: String,
+    icon: ImageVector,
+    isPrimary: Boolean,
+    modifier: Modifier = Modifier,
+    onClick: () -> Unit
+) {
+    Surface(
+        onClick = onClick,
+        shape = RoundedCornerShape(18.dp),
+        color = if (isPrimary)
+            MaterialTheme.colorScheme.primaryContainer
+        else
+            MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.65f),
+        modifier = modifier.height(78.dp)
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(horizontal = 14.dp, vertical = 10.dp)
+        ) {
+            Surface(
+                shape = CircleShape,
+                color = if (isPrimary)
+                    MaterialTheme.colorScheme.primary
+                else
+                    MaterialTheme.colorScheme.surface,
+                modifier = Modifier.size(38.dp)
+            ) {
+                Box(contentAlignment = Alignment.Center) {
+                    Icon(
+                        imageVector = icon,
+                        contentDescription = null,
+                        tint = if (isPrimary)
+                            MaterialTheme.colorScheme.onPrimary
+                        else
+                            MaterialTheme.colorScheme.onSurface,
+                        modifier = Modifier.size(20.dp)
+                    )
+                }
+            }
+            Spacer(modifier = Modifier.width(12.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = title,
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.SemiBold,
+                    color = if (isPrimary)
+                        MaterialTheme.colorScheme.onPrimaryContainer
+                    else
+                        MaterialTheme.colorScheme.onSurface,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Text(
+                    text = subtitle,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = if (isPrimary)
+                        MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.75f)
+                    else
+                        MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+        }
+    }
+}
+
+// -------------------------------------------------------------
+// Component: Setup Permissions Banner (Only shown when missing)
+// -------------------------------------------------------------
+@Composable
+fun SetupPermissionsBanner(
+    needsNotification: Boolean,
+    needsTelephony: Boolean,
+    onOpenNotificationSettings: () -> Unit,
+    onRequestTelephonyPermissions: () -> Unit
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(18.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.4f)
+        )
+    ) {
+        Row(
+            modifier = Modifier.padding(16.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Surface(
+                shape = CircleShape,
+                color = MaterialTheme.colorScheme.tertiaryContainer,
+                modifier = Modifier.size(40.dp)
+            ) {
+                Box(contentAlignment = Alignment.Center) {
+                    Icon(
+                        imageVector = Icons.Default.Shield,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onTertiaryContainer,
+                        modifier = Modifier.size(20.dp)
+                    )
+                }
+            }
+            Spacer(modifier = Modifier.width(14.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = "Complete Feature Setup",
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.SemiBold
+                )
+                Text(
+                    text = if (needsNotification && needsTelephony)
+                        "Allow notification mirroring and phone call alerts on PC."
+                    else if (needsNotification)
+                        "Allow notification mirroring to your desktop."
+                    else
+                        "Allow incoming phone call & SMS alerts on PC.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            Spacer(modifier = Modifier.width(8.dp))
+            Button(
+                onClick = {
+                    if (needsNotification) {
+                        onOpenNotificationSettings()
+                    } else {
+                        onRequestTelephonyPermissions()
+                    }
+                },
+                shape = RoundedCornerShape(12.dp)
+            ) {
+                Text("Set up")
+            }
+        }
+    }
+}
+
+// -------------------------------------------------------------
+// Component: Activity Cards (File, Clipboard, Notification)
+// -------------------------------------------------------------
+@Composable
+fun ActivityFileCard(
+    item: FileTransferItem,
+    onOpenFile: (String) -> Unit
+) {
     OutlinedCard(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(16.dp),
         colors = CardDefaults.outlinedCardColors(containerColor = MaterialTheme.colorScheme.surface)
     ) {
         Column(modifier = Modifier.padding(14.dp)) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                Text(
-                    text = "[${item.appName}] ${item.title}",
-                    style = MaterialTheme.typography.titleSmall,
-                    color = MaterialTheme.colorScheme.primary
-                )
-                Text(
-                    text = timeStr,
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.outline
-                )
-            }
-            Spacer(modifier = Modifier.height(6.dp))
-            Text(text = item.body, style = MaterialTheme.typography.bodyMedium)
-        }
-    }
-}
-
-@Composable
-fun FileTransferCard(item: FileTransferItem, onOpenFile: (String) -> Unit) {
-    OutlinedCard(
-        modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(16.dp),
-        colors = CardDefaults.outlinedCardColors(containerColor = MaterialTheme.colorScheme.surface)
-    ) {
-        Column(modifier = Modifier.padding(16.dp)) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
                 Surface(
                     shape = CircleShape,
                     color = MaterialTheme.colorScheme.primaryContainer,
-                    modifier = Modifier.size(40.dp)
+                    modifier = Modifier.size(38.dp)
                 ) {
                     Box(contentAlignment = Alignment.Center) {
                         Icon(
                             imageVector = if (item.isIncoming) Icons.Default.Download else Icons.Default.Upload,
                             contentDescription = null,
                             tint = MaterialTheme.colorScheme.onPrimaryContainer,
-                            modifier = Modifier.size(20.dp)
+                            modifier = Modifier.size(18.dp)
                         )
                     }
                 }
@@ -888,10 +1372,13 @@ fun FileTransferCard(item: FileTransferItem, onOpenFile: (String) -> Unit) {
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
                         text = item.fileName,
-                        style = MaterialTheme.typography.titleSmall
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.Medium,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
                     )
                     Text(
-                        text = if (item.isIncoming) "From: ${item.peerName}" else "To: ${item.peerName}",
+                        text = "${item.formattedSize} · ${if (item.isIncoming) "From ${item.peerName}" else "To ${item.peerName}"} · ${formatRelativeTime(item.timestamp)}",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.outline
                     )
@@ -899,8 +1386,11 @@ fun FileTransferCard(item: FileTransferItem, onOpenFile: (String) -> Unit) {
 
                 if (item.isCompleted) {
                     if (item.localPath != null) {
-                        IconButton(onClick = { onOpenFile(item.localPath) }) {
-                            Icon(Icons.AutoMirrored.Filled.OpenInNew, contentDescription = "Open File", tint = MaterialTheme.colorScheme.primary)
+                        FilledTonalButton(
+                            onClick = { onOpenFile(item.localPath) },
+                            shape = RoundedCornerShape(10.dp)
+                        ) {
+                            Text("Open", fontSize = 12.sp)
                         }
                     } else {
                         Icon(Icons.Default.CheckCircle, contentDescription = null, tint = Color(0xFF10B981))
@@ -910,40 +1400,13 @@ fun FileTransferCard(item: FileTransferItem, onOpenFile: (String) -> Unit) {
                 }
             }
 
-            Spacer(modifier = Modifier.height(10.dp))
-
             if (!item.isCompleted && !item.isFailed) {
+                Spacer(modifier = Modifier.height(10.dp))
                 LinearProgressIndicator(
                     progress = { item.progressPercentage },
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(8.dp),
-                )
-                Spacer(modifier = Modifier.height(6.dp))
-            }
-
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                Text(
-                    text = item.formattedProgress,
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.outline
-                )
-                Text(
-                    text = when {
-                        item.isCompleted -> "Completed"
-                        item.isFailed -> item.errorMessage ?: "Failed"
-                        else -> "${(item.progressPercentage * 100).toInt()}%"
-                    },
-                    style = MaterialTheme.typography.labelSmall,
-                    fontWeight = FontWeight.Medium,
-                    color = when {
-                        item.isCompleted -> Color(0xFF10B981)
-                        item.isFailed -> MaterialTheme.colorScheme.error
-                        else -> MaterialTheme.colorScheme.primary
-                    }
+                        .height(6.dp)
                 )
             }
         }
@@ -951,791 +1414,266 @@ fun FileTransferCard(item: FileTransferItem, onOpenFile: (String) -> Unit) {
 }
 
 @Composable
-fun ClipboardLogItem(log: ClipboardLog, onCopyText: (String) -> Unit) {
-    val timeStr = SimpleDateFormat("HH:mm:ss", Locale.US).format(Date(log.timestamp))
-
+fun ActivityClipboardCard(
+    log: ClipboardLog,
+    onCopyText: (String) -> Unit
+) {
     OutlinedCard(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(16.dp),
         colors = CardDefaults.outlinedCardColors(containerColor = MaterialTheme.colorScheme.surface)
     ) {
-        Column(modifier = Modifier.padding(14.dp)) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                Text(
-                    text = log.source,
-                    style = MaterialTheme.typography.labelMedium,
-                    fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.primary
-                )
-                Text(
-                    text = timeStr,
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.outline
-                )
-            }
-            Spacer(modifier = Modifier.height(6.dp))
-            Text(
-                text = log.preview,
-                style = MaterialTheme.typography.bodyMedium
-            )
-            Spacer(modifier = Modifier.height(6.dp))
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(
-                    text = "SHA-256: ${log.hash.take(16)}...",
-                    style = MaterialTheme.typography.labelSmall,
-                    fontFamily = FontFamily.Monospace,
-                    color = MaterialTheme.colorScheme.outline,
-                    modifier = Modifier.weight(1f)
-                )
-                IconButton(
-                    onClick = { onCopyText(log.preview) },
-                    modifier = Modifier.size(28.dp)
-                ) {
-                    Icon(
-                        Icons.Default.ContentCopy,
-                        contentDescription = "Copy Content",
-                        tint = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.size(16.dp)
-                    )
-                }
-            }
-        }
-    }
-}
-
-@Composable
-fun PulsingRadarIndicator(modifier: Modifier = Modifier) {
-    val infiniteTransition = rememberInfiniteTransition(label = "pulse")
-    val scale by infiniteTransition.animateFloat(
-        initialValue = 0.85f,
-        targetValue = 1.25f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(1400, easing = FastOutSlowInEasing),
-            repeatMode = RepeatMode.Reverse
-        ),
-        label = "scale"
-    )
-    val alpha by infiniteTransition.animateFloat(
-        initialValue = 0.7f,
-        targetValue = 0.15f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(1400, easing = FastOutSlowInEasing),
-            repeatMode = RepeatMode.Reverse
-        ),
-        label = "alpha"
-    )
-
-    Box(
-        contentAlignment = Alignment.Center,
-        modifier = modifier.size(56.dp)
-    ) {
-        Box(
-            modifier = Modifier
-                .size(48.dp * scale)
-                .background(
-                    color = MaterialTheme.colorScheme.primary.copy(alpha = alpha * 0.35f),
-                    shape = CircleShape
-                )
-        )
-        Surface(
-            shape = CircleShape,
-            color = MaterialTheme.colorScheme.primaryContainer,
-            modifier = Modifier.size(40.dp)
+        Row(
+            modifier = Modifier.padding(14.dp),
+            verticalAlignment = Alignment.CenterVertically
         ) {
-            Box(contentAlignment = Alignment.Center) {
-                Icon(
-                    imageVector = Icons.Default.Wifi,
-                    contentDescription = "Searching",
-                    tint = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.size(22.dp)
-                )
-            }
-        }
-    }
-}
-
-@Composable
-fun OnboardingStepRow(
-    stepNumber: String,
-    title: String,
-    description: String,
-    modifier: Modifier = Modifier
-) {
-    Row(
-        modifier = modifier.fillMaxWidth(),
-        verticalAlignment = Alignment.Top
-    ) {
-        Surface(
-            shape = CircleShape,
-            color = MaterialTheme.colorScheme.primaryContainer,
-            modifier = Modifier.size(26.dp)
-        ) {
-            Box(contentAlignment = Alignment.Center) {
-                Text(
-                    text = stepNumber,
-                    style = MaterialTheme.typography.labelMedium,
-                    fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.onPrimaryContainer
-                )
-            }
-        }
-        Spacer(modifier = Modifier.width(10.dp))
-        Column(modifier = Modifier.weight(1f)) {
-            Text(
-                text = title,
-                style = MaterialTheme.typography.titleSmall,
-                fontWeight = FontWeight.SemiBold,
-                color = MaterialTheme.colorScheme.onSurface
-            )
-            Text(
-                text = description,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-        }
-    }
-}
-
-@Composable
-fun GettingStartedCard(
-    onCopyCommand: (String) -> Unit,
-    onDirectConnectClick: () -> Unit,
-    modifier: Modifier = Modifier
-) {
-    var isTroubleshootingExpanded by remember { mutableStateOf(false) }
-
-    ElevatedCard(
-        modifier = modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(22.dp),
-        colors = CardDefaults.elevatedCardColors(
-            containerColor = MaterialTheme.colorScheme.surface
-        ),
-        elevation = CardDefaults.elevatedCardElevation(defaultElevation = 3.dp)
-    ) {
-        Column(modifier = Modifier.padding(20.dp)) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                PulsingRadarIndicator()
-                Spacer(modifier = Modifier.width(16.dp))
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        text = "Looking for Linux PC...",
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.onSurface
-                    )
-                    Text(
-                        text = "Ensure both devices are on the same Wi-Fi",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.outline
-                    )
-                }
-            }
-
-            Spacer(modifier = Modifier.height(18.dp))
-
-            OnboardingStepRow(
-                stepNumber = "1",
-                title = "Connect to Wi-Fi",
-                description = "Connect phone and Linux laptop to the same Wi-Fi or mobile hotspot."
-            )
-
-            Spacer(modifier = Modifier.height(14.dp))
-
-            Column(modifier = Modifier.fillMaxWidth()) {
-                OnboardingStepRow(
-                    stepNumber = "2",
-                    title = "Run Desktop Daemon",
-                    description = "Open your Linux terminal and start the continuity engine:"
-                )
-                Spacer(modifier = Modifier.height(8.dp))
-                Surface(
-                    shape = RoundedCornerShape(12.dp),
-                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f),
-                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(start = 36.dp)
-                ) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Terminal,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.size(18.dp)
-                        )
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(
-                            text = "continuity-daemon",
-                            fontFamily = FontFamily.Monospace,
-                            fontWeight = FontWeight.SemiBold,
-                            fontSize = 13.sp,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.weight(1f)
-                        )
-                        IconButton(
-                            onClick = { onCopyCommand("continuity-daemon") },
-                            modifier = Modifier.size(32.dp)
-                        ) {
-                            Icon(
-                                Icons.Default.ContentCopy,
-                                contentDescription = "Copy command",
-                                modifier = Modifier.size(16.dp),
-                                tint = MaterialTheme.colorScheme.primary
-                            )
-                        }
-                    }
-                }
-            }
-
-            Spacer(modifier = Modifier.height(14.dp))
-
-            OnboardingStepRow(
-                stepNumber = "3",
-                title = "Zero-Config Auto Pairing",
-                description = "Devices securely discover each other via mDNS & mTLS certificate pinning."
-            )
-
-            Spacer(modifier = Modifier.height(16.dp))
-
             Surface(
-                shape = RoundedCornerShape(14.dp),
-                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clickable { isTroubleshootingExpanded = !isTroubleshootingExpanded }
+                shape = CircleShape,
+                color = MaterialTheme.colorScheme.secondaryContainer,
+                modifier = Modifier.size(38.dp)
             ) {
-                Column(modifier = Modifier.padding(14.dp)) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Icon(
-                            imageVector = Icons.AutoMirrored.Filled.HelpOutline,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.size(20.dp)
-                        )
-                        Spacer(modifier = Modifier.width(10.dp))
-                        Text(
-                            text = "Can't find your laptop?",
-                            style = MaterialTheme.typography.titleSmall,
-                            fontWeight = FontWeight.SemiBold,
-                            modifier = Modifier.weight(1f)
-                        )
-                        Icon(
-                            imageVector = if (isTroubleshootingExpanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.outline
-                        )
-                    }
-
-                    AnimatedVisibility(
-                        visible = isTroubleshootingExpanded,
-                        enter = expandVertically() + fadeIn(),
-                        exit = shrinkVertically() + fadeOut()
-                    ) {
-                        Column(modifier = Modifier.padding(top = 12.dp)) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Icon(
-                                    imageVector = Icons.Default.Cable,
-                                    contentDescription = null,
-                                    tint = MaterialTheme.colorScheme.tertiary,
-                                    modifier = Modifier.size(16.dp)
-                                )
-                                Spacer(modifier = Modifier.width(6.dp))
-                                Text(
-                                    text = "USB Cable Tunnel (Fastest & Zero Wi-Fi)",
-                                    style = MaterialTheme.typography.labelMedium,
-                                    fontWeight = FontWeight.Bold,
-                                    color = MaterialTheme.colorScheme.onSurface
-                                )
-                            }
-                            Spacer(modifier = Modifier.height(4.dp))
-                            Text(
-                                text = "Plug in USB and run port forward in terminal:",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                            Spacer(modifier = Modifier.height(4.dp))
-                            Surface(
-                                shape = RoundedCornerShape(8.dp),
-                                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f),
-                                modifier = Modifier.fillMaxWidth()
-                            ) {
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp)
-                                ) {
-                                    Text(
-                                        text = "adb reverse tcp:52800 tcp:52800",
-                                        fontFamily = FontFamily.Monospace,
-                                        fontSize = 11.sp,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                        modifier = Modifier.weight(1f)
-                                    )
-                                    IconButton(
-                                        onClick = { onCopyCommand("adb reverse tcp:52800 tcp:52800 && adb forward tcp:52801 tcp:52801") },
-                                        modifier = Modifier.size(28.dp)
-                                    ) {
-                                        Icon(
-                                            Icons.Default.ContentCopy,
-                                            contentDescription = "Copy adb command",
-                                            modifier = Modifier.size(14.dp)
-                                        )
-                                    }
-                                }
-                            }
-
-                            Spacer(modifier = Modifier.height(10.dp))
-
-                            Text(
-                                text = "Firewall Check:",
-                                style = MaterialTheme.typography.labelMedium,
-                                fontWeight = FontWeight.Bold
-                            )
-                            Text(
-                                text = "If using UFW, allow incoming TCP traffic: 'sudo ufw allow 52800:52801/tcp'",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-
-                            Spacer(modifier = Modifier.height(12.dp))
-
-                            FilledTonalButton(
-                                onClick = onDirectConnectClick,
-                                shape = RoundedCornerShape(12.dp),
-                                modifier = Modifier.fillMaxWidth()
-                            ) {
-                                Icon(Icons.Default.Sync, contentDescription = null, modifier = Modifier.size(16.dp))
-                                Spacer(modifier = Modifier.width(6.dp))
-                                Text("Connect Directly via IP / USB")
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-fun ConnectedHeroCard(
-    peerName: String,
-    sasCode: String,
-    onNavigateTab: (Int) -> Unit,
-    onSendFile: () -> Unit,
-    modifier: Modifier = Modifier
-) {
-    ElevatedCard(
-        modifier = modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(22.dp),
-        colors = CardDefaults.elevatedCardColors(
-            containerColor = MaterialTheme.colorScheme.surface
-        ),
-        elevation = CardDefaults.elevatedCardElevation(defaultElevation = 3.dp)
-    ) {
-        Column(modifier = Modifier.padding(20.dp)) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Surface(
-                    shape = CircleShape,
-                    color = Color(0xFF10B981).copy(alpha = 0.2f),
-                    modifier = Modifier.size(46.dp)
-                ) {
-                    Box(contentAlignment = Alignment.Center) {
-                        Icon(
-                            imageVector = Icons.Default.CheckCircle,
-                            contentDescription = "Connected",
-                            tint = Color(0xFF10B981),
-                            modifier = Modifier.size(28.dp)
-                        )
-                    }
-                }
-                Spacer(modifier = Modifier.width(14.dp))
-                Column(modifier = Modifier.weight(1f)) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Box(
-                            modifier = Modifier
-                                .size(8.dp)
-                                .background(Color(0xFF10B981), shape = CircleShape)
-                        )
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text(
-                            text = "CONNECTED & ENCRYPTED",
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = Color(0xFF10B981),
-                            letterSpacing = 0.5.sp
-                        )
-                    }
-                    Text(
-                        text = peerName,
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.onSurface
+                Box(contentAlignment = Alignment.Center) {
+                    Icon(
+                        imageVector = Icons.Default.ContentCopy,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSecondaryContainer,
+                        modifier = Modifier.size(18.dp)
                     )
                 }
             }
-
-            if (sasCode.isNotEmpty()) {
-                Spacer(modifier = Modifier.height(14.dp))
-                Surface(
-                    shape = RoundedCornerShape(14.dp),
-                    color = Color(0x1810B981),
-                    border = BorderStroke(1.dp, Color(0x5510B981)),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp)
-                    ) {
-                        Icon(
-                            Icons.Default.Security,
-                            contentDescription = "Verified SAS",
-                            tint = Color(0xFF10B981),
-                            modifier = Modifier.size(22.dp)
-                        )
-                        Spacer(modifier = Modifier.width(12.dp))
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                text = "Security Code (SAS):",
-                                fontSize = 11.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = Color(0xFF10B981)
-                            )
-                            Text(
-                                text = sasCode,
-                                fontSize = 18.sp,
-                                fontFamily = FontFamily.Monospace,
-                                fontWeight = FontWeight.ExtraBold,
-                                color = MaterialTheme.colorScheme.onSurface
-                            )
-                        }
-                        Text(
-                            text = "Matches PC",
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.Medium,
-                            color = MaterialTheme.colorScheme.outline
-                        )
-                    }
-                }
-            }
-
-            Spacer(modifier = Modifier.height(16.dp))
-            Text(
-                text = "Quick Launch Features",
-                style = MaterialTheme.typography.labelMedium,
-                fontWeight = FontWeight.SemiBold,
-                color = MaterialTheme.colorScheme.outline
-            )
-            Spacer(modifier = Modifier.height(8.dp))
-
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                FilledTonalButton(
-                    onClick = { onNavigateTab(1) },
-                    shape = RoundedCornerShape(12.dp),
-                    modifier = Modifier.weight(1f)
-                ) {
-                    Column(
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        modifier = Modifier.padding(vertical = 4.dp)
-                    ) {
-                        Icon(Icons.Default.TouchApp, contentDescription = null, modifier = Modifier.size(20.dp))
-                        Spacer(modifier = Modifier.height(4.dp))
-                        Text("Trackpad", fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
-                    }
-                }
-
-                FilledTonalButton(
-                    onClick = { onNavigateTab(3) },
-                    shape = RoundedCornerShape(12.dp),
-                    modifier = Modifier.weight(1f)
-                ) {
-                    Column(
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        modifier = Modifier.padding(vertical = 4.dp)
-                    ) {
-                        Icon(Icons.Default.Videocam, contentDescription = null, modifier = Modifier.size(20.dp))
-                        Spacer(modifier = Modifier.height(4.dp))
-                        Text("Camera", fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
-                    }
-                }
-
-                FilledTonalButton(
-                    onClick = { onNavigateTab(2) },
-                    shape = RoundedCornerShape(12.dp),
-                    modifier = Modifier.weight(1f)
-                ) {
-                    Column(
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        modifier = Modifier.padding(vertical = 4.dp)
-                    ) {
-                        Icon(Icons.Default.MusicNote, contentDescription = null, modifier = Modifier.size(20.dp))
-                        Spacer(modifier = Modifier.height(4.dp))
-                        Text("Media", fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
-                    }
-                }
-
-                FilledTonalButton(
-                    onClick = onSendFile,
-                    shape = RoundedCornerShape(12.dp),
-                    modifier = Modifier.weight(1f)
-                ) {
-                    Column(
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        modifier = Modifier.padding(vertical = 4.dp)
-                    ) {
-                        Icon(Icons.Default.UploadFile, contentDescription = null, modifier = Modifier.size(20.dp))
-                        Spacer(modifier = Modifier.height(4.dp))
-                        Text("Send File", fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-fun PeerConnectionsCard(
-    connectedPeers: List<String>,
-    discoveredPeers: List<DiscoveredPeer>,
-    onConnectToPeer: (DiscoveredPeer) -> Unit,
-    onOpenDirectConnect: () -> Unit,
-    modifier: Modifier = Modifier
-) {
-    ElevatedCard(
-        modifier = modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(20.dp),
-        colors = CardDefaults.elevatedCardColors(containerColor = MaterialTheme.colorScheme.surface),
-        elevation = CardDefaults.elevatedCardElevation(defaultElevation = 2.dp)
-    ) {
-        Column(modifier = Modifier.padding(18.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Surface(
-                    shape = CircleShape,
-                    color = MaterialTheme.colorScheme.secondaryContainer,
-                    modifier = Modifier.size(36.dp)
-                ) {
-                    Box(contentAlignment = Alignment.Center) {
-                        Icon(
-                            Icons.Default.Sync,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.onSecondaryContainer,
-                            modifier = Modifier.size(20.dp)
-                        )
-                    }
-                }
-                Spacer(modifier = Modifier.width(12.dp))
+            Spacer(modifier = Modifier.width(12.dp))
+            Column(modifier = Modifier.weight(1f)) {
                 Text(
-                    text = "LAN Discovered Peers",
-                    style = MaterialTheme.typography.titleSmall,
-                    fontWeight = FontWeight.SemiBold
+                    text = log.preview,
+                    style = MaterialTheme.typography.bodyMedium,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
                 )
-            }
-            Spacer(modifier = Modifier.height(12.dp))
-
-            if (discoveredPeers.isEmpty()) {
+                Spacer(modifier = Modifier.height(2.dp))
                 Text(
-                    "No additional mDNS peers broadcasting on local subnet.",
+                    text = "${if (log.source.contains("desktop", true)) "From PC" else "From Phone"} · ${formatRelativeTime(log.timestamp)}",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.outline
                 )
-            } else {
-                for (peer in discoveredPeers) {
-                    Surface(
-                        shape = RoundedCornerShape(12.dp),
-                        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(vertical = 4.dp)
-                    ) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)
-                        ) {
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(
-                                    peer.deviceName,
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    fontWeight = FontWeight.SemiBold
-                                )
-                                Text(
-                                    "${peer.host}:${peer.port}",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    fontFamily = FontFamily.Monospace,
-                                    color = MaterialTheme.colorScheme.outline
-                                )
-                            }
-                            FilledTonalButton(
-                                onClick = { onConnectToPeer(peer) },
-                                shape = RoundedCornerShape(8.dp)
-                            ) {
-                                Text("Connect", fontSize = 12.sp)
-                            }
-                        }
-                    }
-                }
             }
-
-            Spacer(modifier = Modifier.height(10.dp))
-            OutlinedButton(
-                onClick = onOpenDirectConnect,
-                shape = RoundedCornerShape(12.dp),
-                modifier = Modifier.fillMaxWidth()
+            Spacer(modifier = Modifier.width(8.dp))
+            IconButton(
+                onClick = { onCopyText(log.preview) },
+                modifier = Modifier.size(32.dp)
             ) {
-                Icon(Icons.Default.Sync, contentDescription = null, modifier = Modifier.size(16.dp))
-                Spacer(modifier = Modifier.width(6.dp))
-                Text("Manual Direct IP / USB Connect", fontSize = 13.sp)
+                Icon(
+                    Icons.Default.ContentCopy,
+                    contentDescription = "Copy again",
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(16.dp)
+                )
             }
         }
     }
 }
 
 @Composable
-fun TechnicalIdentityCard(
-    deviceConfig: DeviceConfig?,
-    fingerprint: String,
-    onCopyText: (String) -> Unit,
-    onOpenDirectConnect: () -> Unit,
-    modifier: Modifier = Modifier
+fun ActivityNotificationCard(
+    item: MirroredNotificationItem
 ) {
-    var isExpanded by remember { mutableStateOf(false) }
-
     OutlinedCard(
-        modifier = modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(18.dp),
-        colors = CardDefaults.outlinedCardColors(
-            containerColor = MaterialTheme.colorScheme.surface
-        )
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.outlinedCardColors(containerColor = MaterialTheme.colorScheme.surface)
     ) {
-        Column(modifier = Modifier.padding(16.dp)) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clickable { isExpanded = !isExpanded }
+        Row(
+            modifier = Modifier.padding(14.dp),
+            verticalAlignment = Alignment.Top
+        ) {
+            Surface(
+                shape = CircleShape,
+                color = MaterialTheme.colorScheme.tertiaryContainer,
+                modifier = Modifier.size(38.dp)
             ) {
-                Surface(
-                    shape = CircleShape,
-                    color = MaterialTheme.colorScheme.surfaceVariant,
-                    modifier = Modifier.size(36.dp)
-                ) {
-                    Box(contentAlignment = Alignment.Center) {
-                        Icon(
-                            imageVector = Icons.Default.Lock,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.size(18.dp)
-                        )
-                    }
+                Box(contentAlignment = Alignment.Center) {
+                    Icon(
+                        imageVector = Icons.Default.Notifications,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onTertiaryContainer,
+                        modifier = Modifier.size(18.dp)
+                    )
                 }
-                Spacer(modifier = Modifier.width(12.dp))
-                Column(modifier = Modifier.weight(1f)) {
+            }
+            Spacer(modifier = Modifier.width(12.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
                     Text(
-                        text = "Device Security & Identity",
+                        text = "[${item.appName}] ${item.title}",
                         style = MaterialTheme.typography.titleSmall,
-                        fontWeight = FontWeight.SemiBold,
-                        color = MaterialTheme.colorScheme.onSurface
+                        fontWeight = FontWeight.Medium,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f)
                     )
                     Text(
-                        text = "TLS 1.3 fingerprint, device ID & ports",
-                        style = MaterialTheme.typography.bodySmall,
+                        text = formatRelativeTime(item.timestamp),
+                        style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.outline
                     )
                 }
-                IconButton(onClick = { isExpanded = !isExpanded }, modifier = Modifier.size(32.dp)) {
-                    Icon(
-                        imageVector = if (isExpanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
-                        contentDescription = if (isExpanded) "Collapse" else "Expand",
-                        tint = MaterialTheme.colorScheme.outline
-                    )
-                }
+                Spacer(modifier = Modifier.height(3.dp))
+                Text(
+                    text = item.body,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 3,
+                    overflow = TextOverflow.Ellipsis
+                )
             }
+        }
+    }
+}
 
-            AnimatedVisibility(
-                visible = isExpanded,
-                enter = expandVertically() + fadeIn(),
-                exit = shrinkVertically() + fadeOut()
+// -------------------------------------------------------------
+// Component: Diagnostics & Tools Bottom Sheet (Test tools & Security)
+// -------------------------------------------------------------
+@Composable
+fun DiagnosticsBottomSheetContent(
+    deviceConfig: DeviceConfig?,
+    fingerprint: String,
+    sasCode: String,
+    onCopyText: (String) -> Unit,
+    onTestCallAlert: () -> Unit,
+    onTestSmsAlert: () -> Unit,
+    onSendTestAlert: () -> Unit,
+    onTestClipboard: () -> Unit,
+    onOpenDirectConnect: () -> Unit
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 24.dp)
+            .padding(bottom = 32.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp)
+    ) {
+        Text(
+            text = "Tools & Diagnostics",
+            style = MaterialTheme.typography.titleLarge,
+            fontWeight = FontWeight.Bold
+        )
+
+        // 1. Simulation & Testing
+        Text(
+            text = "Simulate Desktop Alerts",
+            style = MaterialTheme.typography.labelMedium,
+            fontWeight = FontWeight.SemiBold,
+            color = MaterialTheme.colorScheme.outline
+        )
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            FilledTonalButton(
+                onClick = onTestCallAlert,
+                shape = RoundedCornerShape(12.dp),
+                modifier = Modifier.weight(1f)
             ) {
-                Column(modifier = Modifier.padding(top = 14.dp)) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        Column {
-                            Text("Device Name:", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.outline)
-                            Text(deviceConfig?.deviceName ?: "Initializing...", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
-                        }
-                        Column(horizontalAlignment = Alignment.End) {
-                            Text("Port:", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.outline)
-                            Text("${deviceConfig?.port ?: 52801}", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
-                        }
-                    }
+                Icon(Icons.Default.Call, contentDescription = null, modifier = Modifier.size(16.dp))
+                Spacer(modifier = Modifier.width(6.dp))
+                Text("Test Call")
+            }
+            FilledTonalButton(
+                onClick = onTestSmsAlert,
+                shape = RoundedCornerShape(12.dp),
+                modifier = Modifier.weight(1f)
+            ) {
+                Icon(Icons.AutoMirrored.Filled.Message, contentDescription = null, modifier = Modifier.size(16.dp))
+                Spacer(modifier = Modifier.width(6.dp))
+                Text("Test SMS")
+            }
+        }
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            FilledTonalButton(
+                onClick = onSendTestAlert,
+                shape = RoundedCornerShape(12.dp),
+                modifier = Modifier.weight(1f)
+            ) {
+                Icon(Icons.Default.Notifications, contentDescription = null, modifier = Modifier.size(16.dp))
+                Spacer(modifier = Modifier.width(6.dp))
+                Text("Test Notif")
+            }
+            FilledTonalButton(
+                onClick = onTestClipboard,
+                shape = RoundedCornerShape(12.dp),
+                modifier = Modifier.weight(1f)
+            ) {
+                Icon(Icons.Default.Sync, contentDescription = null, modifier = Modifier.size(16.dp))
+                Spacer(modifier = Modifier.width(6.dp))
+                Text("Test Clip")
+            }
+        }
 
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Text("Device ID:", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.outline)
+        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+
+        // 2. Cryptographic Security & Identity
+        Text(
+            text = "Cryptographic Identity",
+            style = MaterialTheme.typography.labelMedium,
+            fontWeight = FontWeight.SemiBold,
+            color = MaterialTheme.colorScheme.outline
+        )
+        Surface(
+            shape = RoundedCornerShape(14.dp),
+            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Column(modifier = Modifier.padding(14.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text("Device Name:", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.outline)
+                    Text(deviceConfig?.deviceName ?: "Initializing...", style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Medium)
+                }
+                Spacer(modifier = Modifier.height(4.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text("Port:", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.outline)
+                    Text("${deviceConfig?.port ?: 52801}", style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Medium)
+                }
+                Spacer(modifier = Modifier.height(8.dp))
+                Text("TLS Certificate Fingerprint (SHA-256):", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.outline)
+                Spacer(modifier = Modifier.height(4.dp))
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
                     Text(
-                        text = deviceConfig?.deviceId ?: "",
-                        style = MaterialTheme.typography.bodySmall,
+                        text = fingerprint,
+                        fontSize = 10.sp,
                         fontFamily = FontFamily.Monospace,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.weight(1f)
                     )
-
-                    Spacer(modifier = Modifier.height(10.dp))
-                    Text("TLS Certificate Fingerprint (SHA-256):", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.SemiBold)
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Surface(
-                        shape = RoundedCornerShape(10.dp),
-                        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
-                        ) {
-                            Text(
-                                text = fingerprint,
-                                fontSize = 10.sp,
-                                fontFamily = FontFamily.Monospace,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.weight(1f)
-                            )
-                            IconButton(onClick = { onCopyText(fingerprint) }, modifier = Modifier.size(30.dp)) {
-                                Icon(Icons.Default.ContentCopy, contentDescription = "Copy Fingerprint", modifier = Modifier.size(15.dp))
-                            }
-                        }
-                    }
-
-                    Spacer(modifier = Modifier.height(12.dp))
-                    OutlinedButton(
-                        onClick = onOpenDirectConnect,
-                        shape = RoundedCornerShape(10.dp),
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Icon(Icons.Default.Sync, contentDescription = null, modifier = Modifier.size(16.dp))
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text("Direct Connect (USB / IP)", fontSize = 12.sp)
+                    IconButton(onClick = { onCopyText(fingerprint) }, modifier = Modifier.size(28.dp)) {
+                        Icon(Icons.Default.ContentCopy, contentDescription = "Copy Fingerprint", modifier = Modifier.size(14.dp))
                     }
                 }
             }
+        }
+
+        OutlinedButton(
+            onClick = onOpenDirectConnect,
+            shape = RoundedCornerShape(12.dp),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Icon(Icons.Default.Sync, contentDescription = null, modifier = Modifier.size(16.dp))
+            Spacer(modifier = Modifier.width(6.dp))
+            Text("Manual Direct Connection (USB / IP)")
         }
     }
 }

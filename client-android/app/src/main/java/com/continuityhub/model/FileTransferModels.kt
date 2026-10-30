@@ -10,7 +10,8 @@ data class FileTransferItem(
     val isFailed: Boolean = false,
     val errorMessage: String? = null,
     val localPath: String? = null,
-    val peerName: String
+    val peerName: String,
+    val timestamp: Long = System.currentTimeMillis()
 ) {
     val progressPercentage: Float
         get() = if (fileSize > 0) (bytesTransferred.toFloat() / fileSize).coerceIn(0f, 1f) else 0f
