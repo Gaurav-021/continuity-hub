@@ -62,7 +62,7 @@ On a Windows machine with Rust and Visual Studio C++ Build Tools installed:
 
 ```powershell
 # 1. Clone repository
-git clone https://github.com/gaurav/continuity-hub.git
+git clone https://github.com/Gaurav-021/continuity-hub.git
 cd continuity-hub\daemon
 
 # 2. Check compilation
