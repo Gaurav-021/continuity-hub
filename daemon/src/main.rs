@@ -124,6 +124,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let camera_mgr = CameraManager::new(identity.config.device_id.clone());
     let tray_mgr = Arc::new(TrayManager::new());
     telephony_mgr.set_tray_manager(Arc::clone(&tray_mgr)).await;
+    tray_mgr.set_sidecar_manager(camera_mgr.sidecar_manager()).await;
     let _ = tray_mgr.start().await;
 
     info!("File downloads directory: {:?}", file_transfer_mgr.download_dir());

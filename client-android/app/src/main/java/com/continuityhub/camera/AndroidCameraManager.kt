@@ -45,7 +45,10 @@ data class CameraUiState(
     val previewBitmap: Bitmap? = null,
     val desktopScreenBitmap: Bitmap? = null,
     val isDesktopMirroring: Boolean = false,
-    val isDesktopStreaming: Boolean = false
+    val isDesktopStreaming: Boolean = false,
+    val isSidecarActive: Boolean = false,
+    val isSidecarMode: Boolean = false,
+    val sidecarMonitorName: String = "Sidecar"
 )
 
 class AndroidCameraManager(private val context: Context) {
@@ -458,12 +461,79 @@ class AndroidCameraManager(private val context: Context) {
         }
     }
 
+    fun startSidecarStream() {
+        scope.launch {
+            val cmd = CameraControlCommand.newBuilder()
+                .setAction(CameraControlCommand.Action.ACTION_START_SIDECAR)
+                .build()
+
+            ContinuityService.broadcastCameraMessage(
+                CameraMessage.newBuilder().setControl(cmd).build()
+            )
+            _uiState.value = _uiState.value.copy(
+                isDesktopStreaming = true,
+                isDesktopMirroring = true,
+                isSidecarActive = true,
+                isSidecarMode = true
+            )
+            Log.i(tag, "Requested Hyprland Sidecar extended virtual monitor")
+        }
+    }
+
+    fun stopSidecarStream() {
+        scope.launch {
+            val cmd = CameraControlCommand.newBuilder()
+                .setAction(CameraControlCommand.Action.ACTION_STOP_SIDECAR)
+                .build()
+
+            ContinuityService.broadcastCameraMessage(
+                CameraMessage.newBuilder().setControl(cmd).build()
+            )
+            _uiState.value = _uiState.value.copy(
+                isDesktopStreaming = false,
+                isSidecarActive = false
+            )
+            Log.i(tag, "Stopped Hyprland Sidecar extended virtual monitor")
+        }
+    }
+
+    fun toggleSidecarStream() {
+        if (_uiState.value.isSidecarActive) {
+            stopSidecarStream()
+        } else {
+            startSidecarStream()
+        }
+    }
+
+    fun sendSidecarClick(normX: Float, normY: Float) {
+        scope.launch {
+            val cmd = CameraControlCommand.newBuilder()
+                .setAction(CameraControlCommand.Action.ACTION_SIDECAR_CLICK)
+                .setTouchX(normX)
+                .setTouchY(normY)
+                .build()
+
+            ContinuityService.broadcastCameraMessage(
+                CameraMessage.newBuilder().setControl(cmd).build()
+            )
+            Log.d(tag, "Sent Sidecar click at normalized ($normX, $normY)")
+        }
+    }
+
+    fun setSidecarMode(active: Boolean) {
+        _uiState.value = _uiState.value.copy(isSidecarMode = active)
+    }
+
     fun handleDesktopScreenFrame(frame: DesktopScreenFrame) {
         try {
             val bytes = frame.imageBytes.toByteArray()
             val bmp = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
-            _uiState.value = _uiState.value.copy(desktopScreenBitmap = bmp)
-            Log.d(tag, "Updated Desktop Screen Mirror frame (${bytes.size} bytes)")
+            _uiState.value = _uiState.value.copy(
+                desktopScreenBitmap = bmp,
+                isSidecarActive = frame.isSidecar,
+                sidecarMonitorName = frame.monitorName
+            )
+            Log.d(tag, "Updated Desktop Screen frame (${bytes.size} bytes, isSidecar=${frame.isSidecar})")
         } catch (e: Exception) {
             Log.w(tag, "Failed to decode DesktopScreenFrame: ${e.message}")
         }

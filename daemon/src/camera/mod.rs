@@ -16,7 +16,9 @@ use crate::proto::{
 };
 
 pub mod v4l2;
+pub mod sidecar;
 use v4l2::V4l2LoopbackWriter;
+use sidecar::SidecarManager;
 
 #[derive(Clone, Debug)]
 pub struct CameraStatus {
@@ -35,6 +37,8 @@ pub struct CameraManager {
     http_port: u16,
     is_streaming: Arc<AtomicBool>,
     is_desktop_streaming: Arc<AtomicBool>,
+    is_sidecar_streaming: Arc<AtomicBool>,
+    sidecar_mgr: Arc<SidecarManager>,
     latest_frame: Arc<RwLock<Option<CameraFrame>>>,
     active_peer_tx: Arc<RwLock<Option<mpsc::Sender<Packet>>>>,
     frame_tx: broadcast::Sender<Vec<u8>>,
@@ -63,6 +67,8 @@ impl CameraManager {
             http_port,
             is_streaming: Arc::new(AtomicBool::new(false)),
             is_desktop_streaming: Arc::new(AtomicBool::new(false)),
+            is_sidecar_streaming: Arc::new(AtomicBool::new(false)),
+            sidecar_mgr: Arc::new(SidecarManager::new()),
             latest_frame: Arc::new(RwLock::new(None)),
             active_peer_tx: Arc::new(RwLock::new(None)),
             frame_tx,
@@ -246,6 +252,10 @@ impl CameraManager {
         Ok(())
     }
 
+    pub fn sidecar_manager(&self) -> Arc<SidecarManager> {
+        Arc::clone(&self.sidecar_mgr)
+    }
+
     pub async fn set_peer_tx(&self, tx: mpsc::Sender<Packet>) {
         *self.active_peer_tx.write().await = Some(tx);
     }
@@ -355,6 +365,8 @@ impl CameraManager {
                         width: 1920,
                         height: 1080,
                         image_bytes: jpeg_bytes,
+                        is_sidecar: false,
+                        monitor_name: "Primary".to_string(),
                     };
 
                     let reply_msg = CameraMessage {
@@ -401,6 +413,8 @@ impl CameraManager {
                                         width: 1920,
                                         height: 1080,
                                         image_bytes: out.stdout,
+                                        is_sidecar: false,
+                                        monitor_name: "Primary".to_string(),
                                     };
 
                                     let reply_msg = CameraMessage {
@@ -435,6 +449,84 @@ impl CameraManager {
             CameraAction::StopDesktopStream => {
                 info!("Stopping continuous Hyprland desktop screencast stream");
                 self.is_desktop_streaming.store(false, Ordering::Relaxed);
+            }
+            CameraAction::StartSidecar => {
+                info!("Starting Hyprland Sidecar virtual second monitor stream...");
+                let sidecar_mgr = Arc::clone(&self.sidecar_mgr);
+                let is_streaming = Arc::clone(&self.is_sidecar_streaming);
+                let peer_tx_arc = Arc::clone(&self.active_peer_tx);
+                let my_device_id = self.my_device_id.clone();
+
+                match sidecar_mgr.start_sidecar().await {
+                    Ok((_x, _y, width, height)) => {
+                        is_streaming.store(true, Ordering::SeqCst);
+                        tokio::spawn(async move {
+                            let mut interval = tokio::time::interval(tokio::time::Duration::from_millis(50));
+                            interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+
+                            while is_streaming.load(Ordering::Relaxed) {
+                                interval.tick().await;
+
+                                #[cfg(target_os = "linux")]
+                                {
+                                    let output = tokio::process::Command::new("grim")
+                                        .args(["-o", "Sidecar", "-s", "1", "-t", "jpeg", "-q", "50", "-"])
+                                        .output()
+                                        .await;
+
+                                    if let Ok(out) = output {
+                                        if out.status.success() && !out.stdout.is_empty() {
+                                            let screen_frame = DesktopScreenFrame {
+                                                timestamp_ms: chrono::Utc::now().timestamp_millis() as u64,
+                                                width,
+                                                height,
+                                                image_bytes: out.stdout,
+                                                is_sidecar: true,
+                                                monitor_name: "Sidecar".to_string(),
+                                            };
+
+                                            let reply_msg = CameraMessage {
+                                                msg: Some(Msg::DesktopScreen(screen_frame)),
+                                            };
+
+                                            let mut bytes = Vec::new();
+                                            if reply_msg.encode(&mut bytes).is_ok() {
+                                                let packet = Packet {
+                                                    session_id: my_device_id.clone(),
+                                                    sequence_number: 1,
+                                                    channel: Channel::Camera as i32,
+                                                    payload: bytes,
+                                                };
+
+                                                let guard = peer_tx_arc.read().await;
+                                                if let Some(ref tx) = *guard {
+                                                    if tx.send(packet).await.is_err() {
+                                                        break;
+                                                    }
+                                                } else {
+                                                    break;
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            info!("Hyprland Sidecar stream finished");
+                        });
+                    }
+                    Err(e) => {
+                        warn!("Failed to start Hyprland Sidecar: {}", e);
+                    }
+                }
+            }
+            CameraAction::StopSidecar => {
+                info!("Stopping Hyprland Sidecar virtual second monitor stream");
+                self.is_sidecar_streaming.store(false, Ordering::SeqCst);
+                self.sidecar_mgr.stop_sidecar().await;
+            }
+            CameraAction::SidecarClick => {
+                debug!("Received Sidecar touch click event: ({}, {})", control.touch_x, control.touch_y);
+                self.sidecar_mgr.handle_touch_click(control.touch_x, control.touch_y).await;
             }
             CameraAction::SetRotation => {
                 info!("Updated camera stream rotation to {}°", control.rotation_degrees);
@@ -485,6 +577,8 @@ impl CameraManager {
             width: 1920,
             height: 1080,
             rotation_degrees: self.current_rotation.load(Ordering::Relaxed),
+            touch_x: 0.0,
+            touch_y: 0.0,
         };
 
         let msg = CameraMessage {

@@ -13,6 +13,7 @@ pub struct TrayManager {
     is_charging: Arc<AtomicBool>,
     is_connected: Arc<AtomicBool>,
     telemetry_tooltip: Arc<RwLock<String>>,
+    sidecar_mgr: Arc<RwLock<Option<Arc<crate::camera::sidecar::SidecarManager>>>>,
 }
 
 impl TrayManager {
@@ -23,7 +24,12 @@ impl TrayManager {
             is_charging: Arc::new(AtomicBool::new(false)),
             is_connected: Arc::new(AtomicBool::new(false)),
             telemetry_tooltip: Arc::new(RwLock::new("Continuity Hub: Waiting for connection...".to_string())),
+            sidecar_mgr: Arc::new(RwLock::new(None)),
         }
+    }
+
+    pub async fn set_sidecar_manager(&self, sidecar: Arc<crate::camera::sidecar::SidecarManager>) {
+        *self.sidecar_mgr.write().await = Some(sidecar);
     }
 
     pub async fn update_telemetry(
@@ -218,6 +224,16 @@ impl StatusNotifierItem {
     }
 
     async fn activate(&self, _x: i32, _y: i32) {
+        if let Some(ref sidecar) = *self.manager.sidecar_mgr.read().await {
+            if sidecar.is_active() {
+                info!("Tray icon clicked while Sidecar active: moving active window to Sidecar display");
+                if let Err(e) = sidecar.move_active_window_to_sidecar().await {
+                    warn!("Failed to move active window to Sidecar: {}", e);
+                }
+                return;
+            }
+        }
+
         info!("Tray icon activated (left-click) — opening Continuity Camera Viewer");
         let _ = tokio::process::Command::new("xdg-open")
             .arg("http://127.0.0.1:52802")

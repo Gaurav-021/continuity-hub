@@ -35,6 +35,7 @@ import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.ScreenRotation
 import androidx.compose.material.icons.filled.Stop
+import androidx.compose.material.icons.filled.Tv
 import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material.icons.filled.VideocamOff
 import androidx.compose.material.icons.filled.ZoomIn
@@ -45,6 +46,7 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ElevatedCard
 import androidx.compose.material3.FilledIconButton
 import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -85,12 +87,22 @@ fun CameraScreen(
     val cameraManager = ContinuityService.getCameraManager()
     var showFullscreenMirror by remember { mutableStateOf(false) }
 
-    // Fullscreen Landscape Desktop Mirror Dialog
+    // Fullscreen Landscape Desktop Mirror / Sidecar Dialog
     if (showFullscreenMirror && cameraState.desktopScreenBitmap != null) {
         DesktopFullscreenViewer(
             bitmap = cameraState.desktopScreenBitmap!!,
             isStreaming = cameraState.isDesktopStreaming,
-            onToggleStream = { cameraManager?.toggleDesktopStream() },
+            isSidecar = cameraState.isSidecarActive,
+            onToggleStream = {
+                if (cameraState.isSidecarActive) {
+                    cameraManager?.toggleSidecarStream()
+                } else {
+                    cameraManager?.toggleDesktopStream()
+                }
+            },
+            onSidecarClick = { normX, normY ->
+                cameraManager?.sendSidecarClick(normX, normY)
+            },
             onRefresh = { cameraManager?.requestDesktopScreen() },
             onDismiss = { showFullscreenMirror = false }
         )
@@ -343,46 +355,76 @@ fun CameraScreen(
                     .fillMaxWidth()
                     .padding(20.dp)
             ) {
+                var isSidecarModeSelected by remember { mutableStateOf(cameraState.isSidecarActive) }
+
+                // Mode Selector: Desktop Mirror vs Sidecar Virtual Monitor
                 Row(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Surface(
-                            shape = RoundedCornerShape(10.dp),
-                            color = MaterialTheme.colorScheme.tertiaryContainer,
-                            modifier = Modifier.size(32.dp)
-                        ) {
-                            Box(contentAlignment = Alignment.Center) {
-                                Icon(
-                                    imageVector = Icons.Default.Computer,
-                                    contentDescription = null,
-                                    tint = MaterialTheme.colorScheme.onTertiaryContainer,
-                                    modifier = Modifier.size(18.dp)
-                                )
+                    FilterChip(
+                        selected = !isSidecarModeSelected,
+                        onClick = { isSidecarModeSelected = false },
+                        label = { Text("Desktop Mirror", fontSize = 12.sp) },
+                        leadingIcon = {
+                            Icon(Icons.Default.Computer, contentDescription = null, modifier = Modifier.size(16.dp))
+                        },
+                        modifier = Modifier.weight(1f)
+                    )
+                    FilterChip(
+                        selected = isSidecarModeSelected,
+                        onClick = { isSidecarModeSelected = true },
+                        label = { Text("Sidecar Display", fontSize = 12.sp) },
+                        leadingIcon = {
+                            Icon(Icons.Default.Tv, contentDescription = null, modifier = Modifier.size(16.dp))
+                        },
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(14.dp))
+
+                if (isSidecarModeSelected) {
+                    // SIDECAR MODE
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Surface(
+                                shape = RoundedCornerShape(10.dp),
+                                color = Color(0xFF10B981).copy(alpha = 0.2f),
+                                modifier = Modifier.size(34.dp)
+                            ) {
+                                Box(contentAlignment = Alignment.Center) {
+                                    Icon(
+                                        imageVector = Icons.Default.Tv,
+                                        contentDescription = null,
+                                        tint = Color(0xFF10B981),
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                }
                             }
-                        }
-                        Spacer(modifier = Modifier.width(10.dp))
-                        Column {
-                            Text(
-                                text = "Hyprland Desktop Mirror",
-                                style = MaterialTheme.typography.titleMedium
-                            )
-                            if (cameraState.isDesktopStreaming) {
+                            Spacer(modifier = Modifier.width(10.dp))
+                            Column {
                                 Text(
-                                    text = "LIVE STREAMING",
-                                    fontSize = 10.sp,
-                                    color = Color(0xFF22C55E),
+                                    text = "Sidecar Extended Display",
+                                    style = MaterialTheme.typography.titleMedium,
                                     fontWeight = FontWeight.Bold
                                 )
+                                if (cameraState.isSidecarActive) {
+                                    Text(
+                                        text = "● SIDECAR ACTIVE • 1920x1080",
+                                        fontSize = 10.sp,
+                                        color = Color(0xFF10B981),
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                }
                             }
                         }
-                    }
 
-                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        // Fullscreen button
-                        if (cameraState.desktopScreenBitmap != null) {
+                        if (cameraState.desktopScreenBitmap != null && cameraState.isSidecarActive) {
                             FilledIconButton(
                                 onClick = { showFullscreenMirror = true },
                                 modifier = Modifier.size(36.dp)
@@ -390,50 +432,129 @@ fun CameraScreen(
                                 Icon(Icons.Default.Fullscreen, contentDescription = "Fullscreen", modifier = Modifier.size(20.dp))
                             }
                         }
+                    }
 
-                        // Refresh / Capture button
-                        OutlinedButton(
-                            onClick = { cameraManager?.requestDesktopScreen() },
-                            enabled = isConnected && !cameraState.isDesktopStreaming,
-                            shape = RoundedCornerShape(12.dp)
-                        ) {
-                            Icon(Icons.Default.Refresh, contentDescription = "Capture", modifier = Modifier.size(16.dp))
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text("Capture", style = MaterialTheme.typography.labelSmall)
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = "Creates an independent virtual Wayland monitor for your Linux desktop. Drag windows to the right of your laptop screen or click the Continuity Hub tray icon to move windows onto your phone!",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.outline
+                    )
+
+                    Spacer(modifier = Modifier.height(14.dp))
+
+                    Button(
+                        onClick = { cameraManager?.toggleSidecarStream() },
+                        enabled = isConnected,
+                        modifier = Modifier.fillMaxWidth().height(46.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = if (cameraState.isSidecarActive) MaterialTheme.colorScheme.error else Color(0xFF10B981)
+                        ),
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        Icon(
+                            imageVector = if (cameraState.isSidecarActive) Icons.Default.Stop else Icons.Default.Tv,
+                            contentDescription = null,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = if (cameraState.isSidecarActive) "Stop Sidecar Display" else "Start Sidecar Extended Display (1920x1080)",
+                            style = MaterialTheme.typography.labelLarge,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                } else {
+                    // DESKTOP MIRROR MODE
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Surface(
+                                shape = RoundedCornerShape(10.dp),
+                                color = MaterialTheme.colorScheme.tertiaryContainer,
+                                modifier = Modifier.size(32.dp)
+                            ) {
+                                Box(contentAlignment = Alignment.Center) {
+                                    Icon(
+                                        imageVector = Icons.Default.Computer,
+                                        contentDescription = null,
+                                        tint = MaterialTheme.colorScheme.onTertiaryContainer,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                }
+                            }
+                            Spacer(modifier = Modifier.width(10.dp))
+                            Column {
+                                Text(
+                                    text = "Hyprland Desktop Mirror",
+                                    style = MaterialTheme.typography.titleMedium
+                                )
+                                if (cameraState.isDesktopStreaming && !cameraState.isSidecarActive) {
+                                    Text(
+                                        text = "LIVE STREAMING",
+                                        fontSize = 10.sp,
+                                        color = Color(0xFF22C55E),
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                }
+                            }
+                        }
+
+                        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            if (cameraState.desktopScreenBitmap != null && !cameraState.isSidecarActive) {
+                                FilledIconButton(
+                                    onClick = { showFullscreenMirror = true },
+                                    modifier = Modifier.size(36.dp)
+                                ) {
+                                    Icon(Icons.Default.Fullscreen, contentDescription = "Fullscreen", modifier = Modifier.size(20.dp))
+                                }
+                            }
+
+                            OutlinedButton(
+                                onClick = { cameraManager?.requestDesktopScreen() },
+                                enabled = isConnected && !cameraState.isDesktopStreaming,
+                                shape = RoundedCornerShape(12.dp)
+                            ) {
+                                Icon(Icons.Default.Refresh, contentDescription = "Capture", modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("Capture", style = MaterialTheme.typography.labelSmall)
+                            }
                         }
                     }
-                }
 
-                Spacer(modifier = Modifier.height(8.dp))
-                Text(
-                    text = "Stream a real-time feed of your Linux desktop or view in fullscreen landscape.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.outline
-                )
-
-                Spacer(modifier = Modifier.height(12.dp))
-
-                // Live Streaming Toggle Button
-                Button(
-                    onClick = { cameraManager?.toggleDesktopStream() },
-                    enabled = isConnected,
-                    modifier = Modifier.fillMaxWidth().height(44.dp),
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = if (cameraState.isDesktopStreaming) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.tertiary
-                    ),
-                    shape = RoundedCornerShape(12.dp)
-                ) {
-                    Icon(
-                        imageVector = if (cameraState.isDesktopStreaming) Icons.Default.Pause else Icons.Default.PlayArrow,
-                        contentDescription = null,
-                        modifier = Modifier.size(18.dp)
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
+                    Spacer(modifier = Modifier.height(8.dp))
                     Text(
-                        text = if (cameraState.isDesktopStreaming) "Stop Desktop Stream" else "Start Live Desktop Stream (~15 FPS)",
-                        style = MaterialTheme.typography.labelLarge,
-                        fontWeight = FontWeight.Bold
+                        text = "Stream a real-time feed of your primary Linux desktop or view in fullscreen landscape.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.outline
                     )
+
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    Button(
+                        onClick = { cameraManager?.toggleDesktopStream() },
+                        enabled = isConnected,
+                        modifier = Modifier.fillMaxWidth().height(44.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = if (cameraState.isDesktopStreaming && !cameraState.isSidecarActive) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.tertiary
+                        ),
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        Icon(
+                            imageVector = if (cameraState.isDesktopStreaming && !cameraState.isSidecarActive) Icons.Default.Pause else Icons.Default.PlayArrow,
+                            contentDescription = null,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = if (cameraState.isDesktopStreaming && !cameraState.isSidecarActive) "Stop Desktop Stream" else "Start Live Desktop Stream (~15 FPS)",
+                            style = MaterialTheme.typography.labelLarge,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
                 }
 
                 if (cameraState.desktopScreenBitmap != null) {
@@ -506,7 +627,9 @@ fun CameraScreen(
 fun DesktopFullscreenViewer(
     bitmap: android.graphics.Bitmap,
     isStreaming: Boolean,
+    isSidecar: Boolean = false,
     onToggleStream: () -> Unit,
+    onSidecarClick: ((Float, Float) -> Unit)? = null,
     onRefresh: () -> Unit,
     onDismiss: () -> Unit
 ) {
@@ -526,16 +649,23 @@ fun DesktopFullscreenViewer(
                 .fillMaxSize()
                 .background(Color.Black)
         ) {
-            // Interactive Zoomable Desktop Image
+            // Interactive Zoomable Desktop Image with Sidecar Touch support
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .pointerInput(Unit) {
+                    .pointerInput(isSidecar) {
                         detectTapGestures(
                             onDoubleTap = {
                                 scale = if (scale > 1.2f) 1.0f else 2.2f
                                 offsetX = 0f
                                 offsetY = 0f
+                            },
+                            onTap = { offset ->
+                                if (isSidecar && onSidecarClick != null && size.width > 0 && size.height > 0) {
+                                    val normX = (offset.x / size.width).coerceIn(0f, 1f)
+                                    val normY = (offset.y / size.height).coerceIn(0f, 1f)
+                                    onSidecarClick(normX, normY)
+                                }
                             }
                         )
                     }
@@ -578,7 +708,7 @@ fun DesktopFullscreenViewer(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Surface(
-                    color = Color(0xAA000000),
+                    color = Color(0xCC000000),
                     shape = RoundedCornerShape(9999.dp)
                 ) {
                     Row(
@@ -589,13 +719,13 @@ fun DesktopFullscreenViewer(
                             modifier = Modifier
                                 .size(8.dp)
                                 .background(
-                                    if (isStreaming) Color(0xFF22C55E) else Color.Gray,
+                                    if (isSidecar) Color(0xFF10B981) else if (isStreaming) Color(0xFF22C55E) else Color.Gray,
                                     shape = CircleShape
                                 )
                         )
                         Spacer(modifier = Modifier.width(8.dp))
                         Text(
-                            text = if (isStreaming) "LIVE STREAM" else "PAUSED",
+                            text = if (isSidecar) "SIDECAR ACTIVE • TAP TO CLICK" else if (isStreaming) "LIVE STREAM" else "PAUSED",
                             color = Color.White,
                             fontSize = 12.sp,
                             fontWeight = FontWeight.Bold

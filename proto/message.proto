@@ -379,6 +379,9 @@ message CameraControlCommand {
         ACTION_START_DESKTOP_STREAM = 8;
         ACTION_STOP_DESKTOP_STREAM = 9;
         ACTION_SET_ROTATION = 10;
+        ACTION_START_SIDECAR = 11;
+        ACTION_STOP_SIDECAR = 12;
+        ACTION_SIDECAR_CLICK = 13;
     }
     Action action = 1;
     CameraConfig.Lens lens = 2;
@@ -387,6 +390,8 @@ message CameraControlCommand {
     uint32 width = 5;
     uint32 height = 6;
     uint32 rotation_degrees = 7;
+    float touch_x = 8;
+    float touch_y = 9;
 }
 
 message CameraFrame {
@@ -411,6 +416,8 @@ message DesktopScreenFrame {
     uint32 width = 2;
     uint32 height = 3;
     bytes image_bytes = 4;
+    bool is_sidecar = 5;
+    string monitor_name = 6;
 }
 
 message CameraMessage {
