@@ -1,0 +1,96 @@
+name: Continuous Integration
+
+on:
+  push:
+    branches: [ master, main ]
+  pull_request:
+    branches: [ master, main ]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  proto-check:
+    name: Protobuf Schema Parity Check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Verify Schema Hardlink Parity
+        run: |
+          diff -u proto/message.proto client-android/app/src/main/proto/message.proto || {
+            echo "ERROR: proto/message.proto and client-android/app/src/main/proto/message.proto have drifted!"
+            echo "Run: cp proto/message.proto client-android/app/src/main/proto/message.proto"
+            exit 1
+          }
+
+  daemon-ci:
+    name: Linux Daemon Quality Gates
+    runs-on: ubuntu-latest
+    needs: [proto-check]
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Install System Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            protobuf-compiler \
+            libdbus-1-dev \
+            pkg-config
+
+      - name: Setup Rust Stable Toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - name: Cache Cargo Dependencies & Build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: daemon -> target
+
+      - name: Cargo Check
+        run: cargo check -p continuity-daemon --all-targets
+
+      - name: Cargo Unit & Integration Tests
+        run: cargo test -p continuity-daemon --all-targets -- --nocapture
+
+      - name: Cargo Clippy Zero-Warnings Enforcement
+        run: cargo clippy -p continuity-daemon --all-targets -- -D warnings
+
+  android-ci:
+    name: Android Client Quality Gates
+    runs-on: ubuntu-latest
+    needs: [proto-check]
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Grant Execute Permission for Gradlew
+        run: chmod +x client-android/gradlew
+
+      - name: Run Android Unit Tests
+        run: cd client-android && ./gradlew testDebugUnitTest --stacktrace
+
+      - name: Build Debug APK
+        run: cd client-android && ./gradlew assembleDebug --stacktrace
+
+      - name: Upload Debug APK Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: continuity-hub-debug-apk
+          path: client-android/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+          retention-days: 14
