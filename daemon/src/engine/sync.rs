@@ -339,15 +339,6 @@ impl SyncEngine {
             }
         }
 
-        // Deterministic connection tie-breaker:
-        if my_info.device_id > peer_id {
-            debug!(
-                "Deterministic tie-breaker: letting peer {} initiate connection to us (my ID is larger)",
-                peer_id
-            );
-            return;
-        }
-
         // Check if currently attempting connection
         {
             let mut connecting = self.connecting_peers.lock().await;

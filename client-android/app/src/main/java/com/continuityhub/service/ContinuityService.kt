@@ -369,11 +369,6 @@ class ContinuityService : Service() {
     private fun evaluateOutboundConnection(peer: DiscoveredPeer, config: DeviceConfig) {
         if (activeSessions.containsKey(peer.deviceId)) return
 
-        if (config.deviceId > peer.deviceId) {
-            Log.d(tag, "Tie-breaker: letting peer ${peer.deviceName} initiate connection to us")
-            return
-        }
-
         if (!connectingPeers.add(peer.deviceId)) return
 
         scope.launch {
