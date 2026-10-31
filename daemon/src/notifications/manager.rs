@@ -97,8 +97,34 @@ impl NotificationManager {
                                 map_for_timeout.lock().await.remove(&notif_id_for_timeout);
                             });
 
+                            let body_for_action = body.clone();
                             handle.wait_for_action(move |action| {
                                 debug!("Notification action clicked: {}", action);
+
+                                if action == "open_url" || action == "open" || action == "default" {
+                                    if let Some(url) = extract_url(&body_for_action) {
+                                        let url_str = url.to_string();
+                                        info!("Opening shared link on desktop via xdg-open: {}", url_str);
+                                        tokio::spawn(async move {
+                                            if let Err(e) = tokio::process::Command::new("xdg-open")
+                                                .arg(&url_str)
+                                                .spawn()
+                                            {
+                                                tracing::warn!("Failed to launch xdg-open for {}: {}", url_str, e);
+                                            }
+                                        });
+                                    }
+                                }
+
+                                if action == "copy" {
+                                    let copy_text = body_for_action.clone();
+                                    tokio::spawn(async move {
+                                        let _ = tokio::process::Command::new("wl-copy")
+                                            .arg(&copy_text)
+                                            .spawn();
+                                    });
+                                }
+
                                 let action_type = if action == "dismiss" {
                                     ActionType::ActionDismiss
                                 } else if actions_for_click.iter().any(|a| a.action_id == action && a.is_quick_reply) {
@@ -220,5 +246,56 @@ impl NotificationManager {
         self.wrap_packet(NotificationMessage {
             msg: Some(Msg::Post(payload)),
         })
+    }
+}
+
+/// Helper to parse and extract the first HTTP/HTTPS URL from a string.
+pub fn extract_url(text: &str) -> Option<&str> {
+    let trimmed = text.trim();
+    if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
+        let end = trimmed
+            .find(|c: char| c.is_whitespace() || c == '"' || c == '\'')
+            .unwrap_or(trimmed.len());
+        return Some(&trimmed[..end]);
+    }
+    if let Some(pos) = trimmed.find("http://").or_else(|| trimmed.find("https://")) {
+        let rest = &trimmed[pos..];
+        let end = rest
+            .find(|c: char| c.is_whitespace() || c == '"' || c == '\'')
+            .unwrap_or(rest.len());
+        return Some(&rest[..end]);
+    }
+    None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_extract_url_direct() {
+        assert_eq!(
+            extract_url("https://github.com/Gaurav-021/continuity-hub"),
+            Some("https://github.com/Gaurav-021/continuity-hub")
+        );
+        assert_eq!(
+            extract_url("http://localhost:8080/path?arg=1"),
+            Some("http://localhost:8080/path?arg=1")
+        );
+    }
+
+    #[test]
+    fn test_extract_url_surrounded_by_text() {
+        let shared = "Check this out: https://youtu.be/dQw4w9WgXcQ it's great!";
+        assert_eq!(
+            extract_url(shared),
+            Some("https://youtu.be/dQw4w9WgXcQ")
+        );
+    }
+
+    #[test]
+    fn test_extract_url_none() {
+        assert_eq!(extract_url("Just plain text with no link"), None);
+        assert_eq!(extract_url(""), None);
     }
 }

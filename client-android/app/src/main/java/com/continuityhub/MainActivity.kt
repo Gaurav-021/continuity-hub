@@ -12,6 +12,9 @@ import android.os.Bundle
 import android.provider.Settings
 import android.widget.Toast
 import androidx.activity.ComponentActivity
+import androidx.lifecycle.lifecycleScope
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
@@ -291,8 +294,44 @@ class MainActivity : ComponentActivity() {
                     intent.getParcelableExtra(Intent.EXTRA_STREAM)
                 }
                 if (uri != null) {
-                    ContinuityService.sendFile(uri)
-                    Toast.makeText(this, "Sharing file to Continuity Desktop...", Toast.LENGTH_SHORT).show()
+                    lifecycleScope.launch {
+                        var attempts = 0
+                        while (ContinuityService.instance == null && attempts < 15) {
+                            delay(100)
+                            attempts++
+                        }
+                        if (ContinuityService.hasConnectedPeers()) {
+                            ContinuityService.sendFile(uri)
+                            Toast.makeText(this@MainActivity, "Sharing file to Continuity Desktop...", Toast.LENGTH_SHORT).show()
+                            finish()
+                        } else {
+                            Toast.makeText(this@MainActivity, "No desktop connected to share file with", Toast.LENGTH_LONG).show()
+                        }
+                    }
+                } else {
+                    val sharedText = intent.getStringExtra(Intent.EXTRA_TEXT)
+                        ?: intent.getCharSequenceExtra(Intent.EXTRA_TEXT)?.toString()
+                    val sharedSubject = intent.getStringExtra(Intent.EXTRA_SUBJECT)
+
+                    if (!sharedText.isNullOrBlank()) {
+                        lifecycleScope.launch {
+                            var attempts = 0
+                            while (ContinuityService.instance == null && attempts < 15) {
+                                delay(100)
+                                attempts++
+                            }
+                            val sent = ContinuityService.shareTextOrUrl(sharedText, sharedSubject)
+                            if (sent) {
+                                val isUrl = sharedText.trim().startsWith("http://", ignoreCase = true) ||
+                                            sharedText.trim().startsWith("https://", ignoreCase = true)
+                                val label = if (isUrl) "Link" else "Text"
+                                Toast.makeText(this@MainActivity, "$label shared to Continuity Desktop", Toast.LENGTH_SHORT).show()
+                                finish()
+                            } else {
+                                Toast.makeText(this@MainActivity, "No desktop connected to share with", Toast.LENGTH_LONG).show()
+                            }
+                        }
+                    }
                 }
             }
             Intent.ACTION_SEND_MULTIPLE -> {
@@ -302,11 +341,23 @@ class MainActivity : ComponentActivity() {
                     @Suppress("DEPRECATION")
                     intent.getParcelableArrayListExtra(Intent.EXTRA_STREAM)
                 }
-                uris?.forEach { uri ->
-                    ContinuityService.sendFile(uri)
-                }
                 if (!uris.isNullOrEmpty()) {
-                    Toast.makeText(this, "Sharing ${uris.size} files to Desktop...", Toast.LENGTH_SHORT).show()
+                    lifecycleScope.launch {
+                        var attempts = 0
+                        while (ContinuityService.instance == null && attempts < 15) {
+                            delay(100)
+                            attempts++
+                        }
+                        if (ContinuityService.hasConnectedPeers()) {
+                            uris.forEach { uri ->
+                                ContinuityService.sendFile(uri)
+                            }
+                            Toast.makeText(this@MainActivity, "Sharing ${uris.size} files to Desktop...", Toast.LENGTH_SHORT).show()
+                            finish()
+                        } else {
+                            Toast.makeText(this@MainActivity, "No desktop connected to share files with", Toast.LENGTH_LONG).show()
+                        }
+                    }
                 }
             }
         }

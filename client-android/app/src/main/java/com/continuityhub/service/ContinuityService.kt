@@ -38,10 +38,12 @@ import com.continuityhub.proto.HandshakeResponse
 import com.continuityhub.proto.InputMessage
 import com.continuityhub.proto.MediaControlCommand
 import com.continuityhub.proto.MediaMessage
+import com.continuityhub.proto.NotificationAction
 import com.continuityhub.proto.NotificationDismiss
 import com.continuityhub.proto.NotificationMessage
 import com.continuityhub.proto.NotificationPayload
 import com.continuityhub.proto.Packet
+import com.google.protobuf.ByteString
 import com.continuityhub.proto.CallActionRequest
 import com.continuityhub.proto.CallEvent
 import com.continuityhub.proto.DeviceTelemetry
@@ -216,8 +218,18 @@ class ContinuityService : Service() {
             }
         }
 
-        fun sendFile(uri: Uri) {
-            instance?.sendFileInternal(uri)
+        fun hasConnectedPeers(): Boolean {
+            return (instance?.activeSessions?.isNotEmpty() == true)
+        }
+
+        fun sendFile(uri: Uri): Boolean {
+            val inst = instance ?: return false
+            return inst.sendFileInternal(uri)
+        }
+
+        fun shareTextOrUrl(text: String, title: String? = null): Boolean {
+            val inst = instance ?: return false
+            return inst.shareTextOrUrlInternal(text, title)
         }
 
         fun broadcastNotification(payload: NotificationPayload) {
@@ -761,11 +773,11 @@ class ContinuityService : Service() {
         broadcastNotificationInternal(payload)
     }
 
-    fun sendFileInternal(uri: Uri) {
+    fun sendFileInternal(uri: Uri): Boolean {
         val session = activeSessions.values.firstOrNull()
         if (session == null) {
             Log.w(tag, "No active peer session to send file to")
-            return
+            return false
         }
 
         scope.launch {
@@ -778,6 +790,110 @@ class ContinuityService : Service() {
                 Log.e(tag, "Failed sending file", result.exceptionOrNull())
             }
         }
+        return true
+    }
+
+    fun shareTextOrUrlInternal(text: String, title: String? = null): Boolean {
+        val session = activeSessions.values.firstOrNull()
+        if (session == null) {
+            Log.w(tag, "No active peer session to share text/URL with")
+            return false
+        }
+
+        val trimmed = text.trim()
+        val urlRegex = Regex("""https?://[^\s]+""")
+        val extractedUrl = if (trimmed.startsWith("http://", ignoreCase = true) || trimmed.startsWith("https://", ignoreCase = true)) {
+            trimmed
+        } else {
+            urlRegex.find(trimmed)?.value
+        }
+        val isUrl = extractedUrl != null
+
+        // 1. Send via Clipboard channel so desktop clipboard gets it immediately
+        val clipBytes = trimmed.toByteArray(Charsets.UTF_8)
+        val hash = AndroidClipboardManager.hashBytes(clipBytes)
+        clipboardManager.markSeen(hash)
+
+        val clipPayload = ClipboardPayload.newBuilder()
+            .setTimestampMs(System.currentTimeMillis())
+            .setMimeType("text/plain")
+            .setData(ByteString.copyFrom(clipBytes))
+            .setContentHash(hash)
+            .setSourceDeviceId(deviceConfigState.value?.deviceId ?: "")
+            .build()
+
+        broadcastClipboard(clipPayload)
+        addLog("Android", if (isUrl) "Shared Link: $extractedUrl" else "Shared Text: ${trimmed.take(40)}", hash)
+
+        // 2. Dispatch interactive notification to desktop
+        val notifId = "share-" + java.util.UUID.randomUUID().toString()
+        val notifTitle = if (isUrl) "Shared Link" else (title?.takeIf { it.isNotBlank() } ?: "Shared Text")
+        val notifBody = extractedUrl ?: trimmed
+
+        val actionsList = mutableListOf<NotificationAction>()
+        if (isUrl) {
+            actionsList.add(
+                NotificationAction.newBuilder()
+                    .setActionId("open_url")
+                    .setLabel("Open in Browser")
+                    .setIsQuickReply(false)
+                    .build()
+            )
+        }
+        actionsList.add(
+            NotificationAction.newBuilder()
+                .setActionId("copy")
+                .setLabel("Copy")
+                .setIsQuickReply(false)
+                .build()
+        )
+
+        val notifPayload = NotificationPayload.newBuilder()
+            .setNotificationId(notifId)
+            .setPackageName(packageName)
+            .setAppName("Continuity Hub")
+            .setTitle(notifTitle)
+            .setBody(notifBody)
+            .setTimestampMs(System.currentTimeMillis())
+            .setCategory(if (isUrl) "shared_url" else "shared_text")
+            .setHasQuickReply(false)
+            .addAllActions(actionsList)
+            .setSourceDeviceId(deviceConfigState.value?.deviceId ?: "")
+            .build()
+
+        val notifMsg = NotificationMessage.newBuilder().setPost(notifPayload).build()
+        val notifPacket = Packet.newBuilder()
+            .setSessionId(deviceConfigState.value?.deviceId ?: "")
+            .setSequenceNumber(sequenceNumber.incrementAndGet())
+            .setChannel(Channel.CHANNEL_NOTIFICATIONS)
+            .setPayload(notifMsg.toByteString())
+            .build()
+
+        for ((_, sess) in activeSessions) {
+            scope.launch {
+                try {
+                    sess.sendPacket(notifPacket)
+                    Log.i(tag, "Streamed share notification to ${sess.deviceName}")
+                } catch (e: Exception) {
+                    Log.w(tag, "Failed sending share notification: ${e.message}")
+                }
+            }
+        }
+
+        addMirroredNotification(
+            MirroredNotificationItem(
+                notificationId = notifId,
+                packageName = packageName,
+                appName = "Continuity Hub",
+                title = notifTitle,
+                body = notifBody,
+                timestamp = System.currentTimeMillis(),
+                hasQuickReply = false,
+                isIncomingFromDesktop = false
+            )
+        )
+
+        return true
     }
 
     private fun showDesktopAlertNotification(title: String, body: String, appName: String) {
