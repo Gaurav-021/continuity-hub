@@ -64,6 +64,10 @@ struct Args {
     /// Print current phone telemetry status formatted for Waybar JSON and exit
     #[arg(long)]
     waybar: bool,
+
+    /// Open the interactive Phone Mirror viewer in browser
+    #[arg(long)]
+    mirror: bool,
 }
 
 #[tokio::main]
@@ -147,6 +151,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     ));
 
     engine.clone().start().await?;
+
+    if args.mirror {
+        tokio::spawn(async move {
+            tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+            #[cfg(target_os = "linux")]
+            let _ = tokio::process::Command::new("xdg-open")
+                .arg("http://127.0.0.1:52802/phone")
+                .spawn();
+        });
+    }
 
     if let Some(peer_addr) = args.connect {
         let engine_connect = Arc::clone(&engine);

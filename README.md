@@ -93,6 +93,14 @@ Designed from the ground up for modern, zero-compromise Linux desktops running *
 * **System Tray Window Relocation:** Move any active window from your primary desktop to your phone screen with one click in the system tray menu (`hl.dsp.window.move({ workspace = sidecar_ws })`).
 * **Auto-Cleanup:** Headless outputs are automatically dismantled (`hyprctl output remove Sidecar`) when Sidecar mode is closed.
 
+### 📱 Phase 9: Wireless Phone Mirroring & Remote Touch Control
+* **100% Native Architecture:** Experience Apple-like iPhone Mirroring on Linux without cables, ADB, USB debugging, developer mode, or third-party wrappers.
+* **Low-Latency Screen Mirroring:** High-speed streaming (~30 FPS) powered by Android's `MediaProjection` and `VirtualDisplay` pipeline directly over mTLS 1.3 channels.
+* **Interactive Touch & Gestures:** Taps, swipes, drags, and vertical scroll wheel events dispatched across the entire Android OS via `ContinuityAccessibilityService`.
+* **Global Navigation:** Remote buttons for Back, Home, App Switcher / Recents, Notification Shade, and Screen Lock.
+* **Desktop Keyboard Typing:** Type directly from your desktop keyboard into any active Android input field.
+* **Sleek HTML5 Viewer:** Interactive phone bezel viewer served on `http://127.0.0.1:52802/phone` or launched instantly with `continuity-daemon --mirror`.
+
 ### 🛡️ Production UX, Tray Applet & Verification
 * **D-Bus StatusNotifierItem Tray Applet:** Persistent status indicator in Hyprpanel, Waybar, or KDE system trays showing connection status, peer count, quick file transfers, Sidecar toggles, and daemon controls.
 * **Material 3 / Material You Mobile UI:** Dynamic theme colors, animated bottom navigation, pulsing discovery radar, terminal copy chip, and expandable troubleshooting guide.

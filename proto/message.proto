@@ -192,12 +192,51 @@ message KeyEvent {
     repeated string modifiers = 4;
 }
 
+message PhoneTouchEvent {
+    enum TouchType {
+        TOUCH_TAP = 0;
+        TOUCH_DOWN = 1;
+        TOUCH_MOVE = 2;
+        TOUCH_UP = 3;
+        TOUCH_SWIPE = 4;
+        TOUCH_SCROLL = 5;
+    }
+    TouchType type = 1;
+    float normalized_x = 2;
+    float normalized_y = 3;
+    float end_x = 4;
+    float end_y = 5;
+    uint32 duration_ms = 6;
+    float scroll_dx = 7;
+    float scroll_dy = 8;
+}
+
+message PhoneNavAction {
+    enum Action {
+        ACTION_UNKNOWN = 0;
+        ACTION_BACK = 1;
+        ACTION_HOME = 2;
+        ACTION_RECENTS = 3;
+        ACTION_NOTIFICATIONS = 4;
+        ACTION_LOCK = 5;
+    }
+    Action action = 1;
+}
+
+message PhoneTextAction {
+    string text = 1;
+    bool press_enter = 2;
+}
+
 message InputMessage {
     oneof event {
         MouseMoveEvent mouse_move = 1;
         MouseButtonEvent mouse_button = 2;
         MouseScrollEvent mouse_scroll = 3;
         KeyEvent key_event = 4;
+        PhoneTouchEvent phone_touch = 5;
+        PhoneNavAction phone_nav = 6;
+        PhoneTextAction phone_text = 7;
     }
 }
 
@@ -382,6 +421,8 @@ message CameraControlCommand {
         ACTION_START_SIDECAR = 11;
         ACTION_STOP_SIDECAR = 12;
         ACTION_SIDECAR_CLICK = 13;
+        ACTION_START_PHONE_MIRROR = 14;
+        ACTION_STOP_PHONE_MIRROR = 15;
     }
     Action action = 1;
     CameraConfig.Lens lens = 2;
@@ -401,6 +442,7 @@ message CameraFrame {
     uint32 height = 4;
     bytes frame_data = 5;
     bool is_keyframe = 6;
+    bool is_phone_screen = 7;
 }
 
 message CameraSnapshot {

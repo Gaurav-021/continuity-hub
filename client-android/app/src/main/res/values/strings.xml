@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Continuity Hub</string>
+    <string name="accessibility_service_name">Continuity Hub Remote Input</string>
+    <string name="accessibility_service_description">Enables wireless touch, click, swipe gestures, and system navigation (Back/Home/Recents) when controlling your phone from Continuity Desktop.</string>
+</resources>

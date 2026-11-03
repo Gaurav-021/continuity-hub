@@ -9,16 +9,19 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.net.Uri
+import android.media.projection.MediaProjection
 import android.os.Build
 import android.os.IBinder
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import com.continuityhub.MainActivity
 import com.continuityhub.camera.AndroidCameraManager
+import com.continuityhub.camera.AndroidPhoneMirrorManager
 import com.continuityhub.camera.CameraUiState
 import com.continuityhub.clipboard.AndroidClipboardManager
 import com.continuityhub.crypto.CryptoManager
 import com.continuityhub.discovery.NsdDiscoveryManager
+import com.continuityhub.input.ContinuityAccessibilityService
 import com.continuityhub.media.ActiveMediaState
 import com.continuityhub.media.AndroidMediaManager
 import com.continuityhub.model.ClipboardLog
@@ -86,6 +89,7 @@ class ContinuityService : Service() {
     private lateinit var telemetryMonitor: DeviceTelemetryMonitor
     private lateinit var mediaManager: AndroidMediaManager
     private lateinit var cameraManager: AndroidCameraManager
+    private lateinit var phoneMirrorManager: AndroidPhoneMirrorManager
 
     private val activeSessions = ConcurrentHashMap<String, PeerSession>()
     private val connectingPeers = ConcurrentHashMap.newKeySet<String>()
@@ -156,6 +160,24 @@ class ContinuityService : Service() {
         val mediaState = MutableStateFlow(ActiveMediaState())
         val cameraUiState = MutableStateFlow(CameraUiState())
         val sasCodeState = MutableStateFlow("")
+        val isPhoneMirroringState = MutableStateFlow(false)
+        val phoneMirrorRequestedState = MutableStateFlow(false)
+
+        fun startPhoneMirror(resultCode: Int, data: Intent, width: Int = 720, height: Int = 1600) {
+            instance?.startPhoneMirrorWithIntent(resultCode, data, width, height)
+        }
+
+        fun startPhoneMirror(projection: MediaProjection, width: Int = 720, height: Int = 1600) {
+            instance?.startPhoneMirrorInternal(projection, width, height)
+        }
+
+        fun stopPhoneMirror() {
+            instance?.stopPhoneMirrorInternal()
+        }
+
+        fun isAccessibilityGranted(): Boolean {
+            return ContinuityAccessibilityService.isRunning()
+        }
         val clipboardSyncEnabledState = MutableStateFlow(true)
         val clipboardOutboundEnabledState = MutableStateFlow(true)
         val clipboardInboundEnabledState = MutableStateFlow(true)
@@ -358,6 +380,16 @@ class ContinuityService : Service() {
         scope.launch {
             cameraManager.uiState.collect { state ->
                 cameraUiState.value = state
+            }
+        }
+
+        phoneMirrorManager = AndroidPhoneMirrorManager(this) { frame ->
+            val msg = CameraMessage.newBuilder().setFrame(frame).build()
+            broadcastCameraMessageInternal(msg)
+        }
+        scope.launch {
+            phoneMirrorManager.isMirroringState.collect { active ->
+                isPhoneMirroringState.value = active
             }
         }
 
@@ -631,7 +663,21 @@ class ContinuityService : Service() {
                         Log.d(tag, "Heartbeat from $peerDeviceName")
                     }
                     Channel.CHANNEL_INPUT -> {
-                        Log.d(tag, "Received input from $peerDeviceName")
+                        val inputMsg = InputMessage.parseFrom(packet.payload)
+                        when (inputMsg.eventCase) {
+                            InputMessage.EventCase.PHONE_TOUCH -> {
+                                ContinuityAccessibilityService.executeTouch(inputMsg.phoneTouch)
+                            }
+                            InputMessage.EventCase.PHONE_NAV -> {
+                                ContinuityAccessibilityService.executeNav(inputMsg.phoneNav.action)
+                            }
+                            InputMessage.EventCase.PHONE_TEXT -> {
+                                ContinuityAccessibilityService.executeText(inputMsg.phoneText)
+                            }
+                            else -> {
+                                Log.d(tag, "Received other input event from $peerDeviceName")
+                            }
+                        }
                     }
                     Channel.CHANNEL_TELEPHONY -> {
                         val telephonyMsg = TelephonyMessage.parseFrom(packet.payload)
@@ -658,7 +704,17 @@ class ContinuityService : Service() {
                         val cameraMsg = CameraMessage.parseFrom(packet.payload)
                         when (cameraMsg.msgCase) {
                             CameraMessage.MsgCase.CONTROL -> {
-                                cameraManager.executeRemoteControl(cameraMsg.control)
+                                val ctrl = cameraMsg.control
+                                when (ctrl.action) {
+                                    CameraControlCommand.Action.ACTION_START_PHONE_MIRROR -> {
+                                        phoneMirrorRequestedState.value = true
+                                    }
+                                    CameraControlCommand.Action.ACTION_STOP_PHONE_MIRROR -> {
+                                        phoneMirrorManager.stopMirror()
+                                        phoneMirrorRequestedState.value = false
+                                    }
+                                    else -> cameraManager.executeRemoteControl(ctrl)
+                                }
                             }
                             CameraMessage.MsgCase.DESKTOP_SCREEN -> {
                                 cameraManager.handleDesktopScreenFrame(cameraMsg.desktopScreen)
@@ -1051,10 +1107,94 @@ class ContinuityService : Service() {
         }
     }
 
+    private fun startPhoneMirrorWithIntent(resultCode: Int, data: Intent, width: Int, height: Int) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            val pendingIntent = PendingIntent.getActivity(
+                this,
+                0,
+                Intent(this, MainActivity::class.java),
+                PendingIntent.FLAG_IMMUTABLE
+            )
+            val notification = NotificationCompat.Builder(this, CHANNEL_ID)
+                .setContentTitle("Continuity Hub — Phone Mirror Active")
+                .setContentText("Streaming phone screen to Continuity Desktop")
+                .setSmallIcon(android.R.drawable.stat_notify_sync)
+                .setContentIntent(pendingIntent)
+                .setOngoing(true)
+                .build()
+
+            val fgsType = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE or ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION
+            } else {
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE
+            }
+            startForeground(NOTIFICATION_ID, notification, fgsType)
+        }
+        val mpManager = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as? android.media.projection.MediaProjectionManager
+        val projection = mpManager?.getMediaProjection(resultCode, data)
+        if (projection != null) {
+            phoneMirrorManager.startMirror(projection, width, height)
+            isPhoneMirroringState.value = true
+        } else {
+            Log.e(tag, "Failed to obtain MediaProjection from intent result")
+            stopPhoneMirrorInternal()
+        }
+    }
+
+    private fun startPhoneMirrorInternal(projection: MediaProjection, width: Int, height: Int) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            val pendingIntent = PendingIntent.getActivity(
+                this,
+                0,
+                Intent(this, MainActivity::class.java),
+                PendingIntent.FLAG_IMMUTABLE
+            )
+            val notification = NotificationCompat.Builder(this, CHANNEL_ID)
+                .setContentTitle("Continuity Hub — Phone Mirror Active")
+                .setContentText("Streaming phone screen to Continuity Desktop")
+                .setSmallIcon(android.R.drawable.stat_notify_sync)
+                .setContentIntent(pendingIntent)
+                .setOngoing(true)
+                .build()
+
+            val fgsType = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE or ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION
+            } else {
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE
+            }
+            startForeground(NOTIFICATION_ID, notification, fgsType)
+        }
+        phoneMirrorManager.startMirror(projection, width, height)
+        isPhoneMirroringState.value = true
+    }
+
+    private fun stopPhoneMirrorInternal() {
+        phoneMirrorManager.stopMirror()
+        isPhoneMirroringState.value = false
+        phoneMirrorRequestedState.value = false
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            val pendingIntent = PendingIntent.getActivity(
+                this,
+                0,
+                Intent(this, MainActivity::class.java),
+                PendingIntent.FLAG_IMMUTABLE
+            )
+            val notification = NotificationCompat.Builder(this, CHANNEL_ID)
+                .setContentTitle("Continuity Hub Active")
+                .setContentText("Syncing clipboard, file drop & notification mirroring...")
+                .setSmallIcon(android.R.drawable.stat_notify_sync)
+                .setContentIntent(pendingIntent)
+                .setOngoing(true)
+                .build()
+            startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE)
+        }
+    }
+
     override fun onDestroy() {
         super.onDestroy()
         instance = null
         Log.i(tag, "ContinuityService stopping...")
+        phoneMirrorManager.stopMirror()
         cameraManager.stopStreaming()
         mediaManager.stop()
         discoveryManager.stopDiscovery()

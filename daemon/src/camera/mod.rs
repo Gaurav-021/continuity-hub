@@ -11,8 +11,11 @@ use crate::proto::{
     camera_config::Lens,
     camera_control_command::Action as CameraAction,
     camera_message::Msg,
+    input_message::Event as InputEvent,
+    phone_nav_action::Action as PhoneNavActionEnum,
+    phone_touch_event::TouchType as PhoneTouchTypeEnum,
     CameraConfig, CameraControlCommand, CameraFrame, CameraMessage, CameraSnapshot,
-    Channel, DesktopScreenFrame, Packet,
+    Channel, DesktopScreenFrame, InputMessage, Packet, PhoneNavAction, PhoneTextAction, PhoneTouchEvent,
 };
 
 pub mod v4l2;
@@ -38,16 +41,23 @@ pub struct CameraManager {
     is_streaming: Arc<AtomicBool>,
     is_desktop_streaming: Arc<AtomicBool>,
     is_sidecar_streaming: Arc<AtomicBool>,
+    is_phone_mirror_streaming: Arc<AtomicBool>,
     sidecar_mgr: Arc<SidecarManager>,
     latest_frame: Arc<RwLock<Option<CameraFrame>>>,
+    latest_phone_frame: Arc<RwLock<Option<CameraFrame>>>,
     active_peer_tx: Arc<RwLock<Option<mpsc::Sender<Packet>>>>,
     frame_tx: broadcast::Sender<Vec<u8>>,
+    phone_frame_tx: broadcast::Sender<Vec<u8>>,
     fps_counter: Arc<AtomicU32>,
     current_fps: Arc<AtomicU32>,
+    phone_fps_counter: Arc<AtomicU32>,
+    current_phone_fps: Arc<AtomicU32>,
     current_lens: Arc<RwLock<String>>,
     current_rotation: Arc<AtomicU32>,
     current_width: Arc<RwLock<u32>>,
     current_height: Arc<RwLock<u32>>,
+    phone_width: Arc<RwLock<u32>>,
+    phone_height: Arc<RwLock<u32>>,
     snapshot_path: PathBuf,
     v4l2_writer: Arc<tokio::sync::Mutex<V4l2LoopbackWriter>>,
 }
@@ -59,8 +69,15 @@ impl CameraManager {
 
     pub fn with_port(my_device_id: String, http_port: u16) -> Arc<Self> {
         let (frame_tx, _) = broadcast::channel::<Vec<u8>>(32);
+        let (phone_frame_tx, _) = broadcast::channel::<Vec<u8>>(32);
         let snapshot_path = std::env::temp_dir().join("continuity-camera-snapshot.jpg");
         let v4l2_writer = Arc::new(tokio::sync::Mutex::new(V4l2LoopbackWriter::new()));
+
+        let is_phone_mirror_streaming = Arc::new(AtomicBool::new(false));
+        let phone_fps_counter = Arc::new(AtomicU32::new(0));
+        let current_phone_fps = Arc::new(AtomicU32::new(0));
+        let phone_width = Arc::new(RwLock::new(720));
+        let phone_height = Arc::new(RwLock::new(1600));
 
         let manager = Arc::new(Self {
             my_device_id,
@@ -68,16 +85,23 @@ impl CameraManager {
             is_streaming: Arc::new(AtomicBool::new(false)),
             is_desktop_streaming: Arc::new(AtomicBool::new(false)),
             is_sidecar_streaming: Arc::new(AtomicBool::new(false)),
+            is_phone_mirror_streaming,
             sidecar_mgr: Arc::new(SidecarManager::new()),
             latest_frame: Arc::new(RwLock::new(None)),
+            latest_phone_frame: Arc::new(RwLock::new(None)),
             active_peer_tx: Arc::new(RwLock::new(None)),
             frame_tx,
+            phone_frame_tx,
             fps_counter: Arc::new(AtomicU32::new(0)),
             current_fps: Arc::new(AtomicU32::new(0)),
+            phone_fps_counter: Arc::clone(&phone_fps_counter),
+            current_phone_fps: Arc::clone(&current_phone_fps),
             current_lens: Arc::new(RwLock::new("Back".to_string())),
             current_rotation: Arc::new(AtomicU32::new(0)),
             current_width: Arc::new(RwLock::new(1920)),
             current_height: Arc::new(RwLock::new(1080)),
+            phone_width,
+            phone_height,
             snapshot_path,
             v4l2_writer,
         });
@@ -91,6 +115,8 @@ impl CameraManager {
                 interval.tick().await;
                 let count = fps_counter.swap(0, Ordering::Relaxed);
                 current_fps.store(count, Ordering::Relaxed);
+                let p_count = phone_fps_counter.swap(0, Ordering::Relaxed);
+                current_phone_fps.store(p_count, Ordering::Relaxed);
             }
         });
 
@@ -109,18 +135,30 @@ impl CameraManager {
                 let manager = Arc::clone(&manager_clone);
 
                 tokio::spawn(async move {
-                    let mut buf = [0u8; 1024];
+                    let mut buf = [0u8; 4096];
                     let n = match stream.read(&mut buf).await {
                         Ok(n) if n > 0 => n,
                         _ => return,
                     };
 
                     let req_str = String::from_utf8_lossy(&buf[..n]);
-                    let path = req_str
-                        .lines()
-                        .next()
-                        .and_then(|line| line.split_whitespace().nth(1))
-                        .unwrap_or("/");
+                    let first_line = req_str.lines().next().unwrap_or("");
+                    let mut parts = first_line.split_whitespace();
+                    let method = parts.next().unwrap_or("GET");
+                    let full_path = parts.next().unwrap_or("/");
+
+                    if method == "OPTIONS" {
+                        let cors_resp = "HTTP/1.1 200 OK\r\n\
+                                         Access-Control-Allow-Origin: *\r\n\
+                                         Access-Control-Allow-Methods: GET, POST, OPTIONS\r\n\
+                                         Access-Control-Allow-Headers: Content-Type\r\n\
+                                         Content-Length: 0\r\n\r\n";
+                        let _ = stream.write_all(cors_resp.as_bytes()).await;
+                        return;
+                    }
+
+                    let path = full_path.split('?').next().unwrap_or(full_path);
+                    let query_string = full_path.split_once('?').map(|(_, q)| q).unwrap_or("");
 
                     if path.starts_with("/live.mjpg") {
                         // MJPEG Stream multipart response
@@ -162,6 +200,690 @@ impl CameraManager {
                                 }
                             }
                         }
+                    } else if path.starts_with("/phone/stream.mjpg") || path.starts_with("/phone.mjpg") {
+                        // Phone Mirror MJPEG Stream multipart response
+                        let header = "HTTP/1.1 200 OK\r\n\
+                                      Content-Type: multipart/x-mixed-replace; boundary=frame\r\n\
+                                      Cache-Control: no-cache, no-store, must-revalidate\r\n\
+                                      Pragma: no-cache\r\n\
+                                      Expires: 0\r\n\
+                                      Access-Control-Allow-Origin: *\r\n\
+                                      Connection: close\r\n\r\n";
+                        if stream.write_all(header.as_bytes()).await.is_err() {
+                            return;
+                        }
+
+                        // Send latest frame immediately if available
+                        if let Some(ref frame) = *manager.latest_phone_frame.read().await {
+                            let part_header = format!(
+                                "--frame\r\nContent-Type: image/jpeg\r\nContent-Length: {}\r\n\r\n",
+                                frame.frame_data.len()
+                            );
+                            let _ = stream.write_all(part_header.as_bytes()).await;
+                            let _ = stream.write_all(&frame.frame_data).await;
+                            let _ = stream.write_all(b"\r\n").await;
+                        }
+
+                        let mut frame_rx = manager.phone_frame_tx.subscribe();
+                        loop {
+                            match frame_rx.recv().await {
+                                Ok(frame_bytes) => {
+                                    let part_header = format!(
+                                        "--frame\r\nContent-Type: image/jpeg\r\nContent-Length: {}\r\n\r\n",
+                                        frame_bytes.len()
+                                    );
+                                    if stream.write_all(part_header.as_bytes()).await.is_err() {
+                                        break;
+                                    }
+                                    if stream.write_all(&frame_bytes).await.is_err() {
+                                        break;
+                                    }
+                                    if stream.write_all(b"\r\n").await.is_err() {
+                                        break;
+                                    }
+                                }
+                                Err(broadcast::error::RecvError::Lagged(skipped)) => {
+                                    debug!("Phone mirror MJPEG client lagged, skipped {} frames", skipped);
+                                    continue;
+                                }
+                                Err(broadcast::error::RecvError::Closed) => {
+                                    break;
+                                }
+                            }
+                        }
+                    } else if path.starts_with("/phone/snapshot.jpg") {
+                        let frame_opt = manager.latest_phone_frame.read().await.clone();
+                        if let Some(frame) = frame_opt {
+                            let header = format!(
+                                "HTTP/1.1 200 OK\r\n\
+                                 Content-Type: image/jpeg\r\n\
+                                 Content-Length: {}\r\n\
+                                 Access-Control-Allow-Origin: *\r\n\
+                                 Connection: close\r\n\r\n",
+                                frame.frame_data.len()
+                            );
+                            let _ = stream.write_all(header.as_bytes()).await;
+                            let _ = stream.write_all(&frame.frame_data).await;
+                        } else {
+                            let not_found = "HTTP/1.1 404 Not Found\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: 0\r\n\r\n";
+                            let _ = stream.write_all(not_found.as_bytes()).await;
+                        }
+                    } else if path.starts_with("/phone/status") {
+                        let is_mirroring = manager.is_phone_mirror_streaming.load(Ordering::Relaxed);
+                        let w = *manager.phone_width.read().await;
+                        let h = *manager.phone_height.read().await;
+                        let fps = manager.current_phone_fps.load(Ordering::Relaxed);
+
+                        let json = serde_json::json!({
+                            "is_mirroring": is_mirroring,
+                            "width": w,
+                            "height": h,
+                            "fps": fps,
+                            "stream_url": format!("http://127.0.0.1:{}/phone/stream.mjpg", manager.http_port),
+                        });
+                        let body = json.to_string();
+                        let header = format!(
+                            "HTTP/1.1 200 OK\r\n\
+                             Content-Type: application/json\r\n\
+                             Content-Length: {}\r\n\
+                             Access-Control-Allow-Origin: *\r\n\
+                             Connection: close\r\n\r\n",
+                            body.len()
+                        );
+                        let _ = stream.write_all(header.as_bytes()).await;
+                        let _ = stream.write_all(body.as_bytes()).await;
+                    } else if path.starts_with("/phone/start") {
+                        let ok = manager.start_phone_mirror().await;
+                        let json = serde_json::json!({ "ok": ok, "status": if ok { "started" } else { "failed" } });
+                        let body = json.to_string();
+                        let header = format!(
+                            "HTTP/1.1 200 OK\r\n\
+                             Content-Type: application/json\r\n\
+                             Content-Length: {}\r\n\
+                             Access-Control-Allow-Origin: *\r\n\
+                             Connection: close\r\n\r\n",
+                            body.len()
+                        );
+                        let _ = stream.write_all(header.as_bytes()).await;
+                        let _ = stream.write_all(body.as_bytes()).await;
+                    } else if path.starts_with("/phone/stop") {
+                        let ok = manager.stop_phone_mirror().await;
+                        let json = serde_json::json!({ "ok": ok, "status": if ok { "stopped" } else { "failed" } });
+                        let body = json.to_string();
+                        let header = format!(
+                            "HTTP/1.1 200 OK\r\n\
+                             Content-Type: application/json\r\n\
+                             Content-Length: {}\r\n\
+                             Access-Control-Allow-Origin: *\r\n\
+                             Connection: close\r\n\r\n",
+                            body.len()
+                        );
+                        let _ = stream.write_all(header.as_bytes()).await;
+                        let _ = stream.write_all(body.as_bytes()).await;
+                    } else if path.starts_with("/phone/input") {
+                        // Extract parameters from JSON body or query string
+                        let req_body = req_str.split_once("\r\n\r\n")
+                            .map(|(_, b)| b)
+                            .or_else(|| req_str.split_once("\n\n").map(|(_, b)| b))
+                            .unwrap_or("");
+
+                        let mut event_type = String::new();
+                        let mut x: f32 = 0.0;
+                        let mut y: f32 = 0.0;
+                        let mut end_x: f32 = 0.0;
+                        let mut end_y: f32 = 0.0;
+                        let mut duration_ms: u32 = 200;
+                        let mut scroll_dx: f32 = 0.0;
+                        let mut scroll_dy: f32 = 0.0;
+                        let mut nav_action = String::new();
+                        let mut text_str = String::new();
+                        let mut press_enter = false;
+
+                        if let Ok(json) = serde_json::from_str::<serde_json::Value>(req_body.trim()) {
+                            if let Some(t) = json.get("type").and_then(|v| v.as_str()) { event_type = t.to_string(); }
+                            if let Some(v) = json.get("x").and_then(|v| v.as_f64()) { x = v as f32; }
+                            if let Some(v) = json.get("y").and_then(|v| v.as_f64()) { y = v as f32; }
+                            if let Some(v) = json.get("end_x").and_then(|v| v.as_f64()) { end_x = v as f32; }
+                            if let Some(v) = json.get("end_y").and_then(|v| v.as_f64()) { end_y = v as f32; }
+                            if let Some(v) = json.get("duration").and_then(|v| v.as_u64()) { duration_ms = v as u32; }
+                            if let Some(v) = json.get("scroll_dx").and_then(|v| v.as_f64()) { scroll_dx = v as f32; }
+                            if let Some(v) = json.get("scroll_dy").and_then(|v| v.as_f64()) { scroll_dy = v as f32; }
+                            if let Some(v) = json.get("action").and_then(|v| v.as_str()) { nav_action = v.to_string(); }
+                            if let Some(v) = json.get("text").and_then(|v| v.as_str()) { text_str = v.to_string(); }
+                            if let Some(v) = json.get("enter").and_then(|v| v.as_bool()) { press_enter = v; }
+                        }
+
+                        // Query string fallback
+                        for part in query_string.split('&') {
+                            if let Some((k, v)) = part.split_once('=') {
+                                let decoded = url_decode(v);
+                                match k {
+                                    "type" => event_type = decoded.clone(),
+                                    "x" => x = decoded.parse().unwrap_or(x),
+                                    "y" => y = decoded.parse().unwrap_or(y),
+                                    "end_x" => end_x = decoded.parse().unwrap_or(end_x),
+                                    "end_y" => end_y = decoded.parse().unwrap_or(end_y),
+                                    "duration" => duration_ms = decoded.parse().unwrap_or(duration_ms),
+                                    "scroll_dx" => scroll_dx = decoded.parse().unwrap_or(scroll_dx),
+                                    "scroll_dy" => scroll_dy = decoded.parse().unwrap_or(scroll_dy),
+                                    "action" => nav_action = decoded.clone(),
+                                    "text" => text_str = decoded.clone(),
+                                    "enter" => press_enter = decoded == "true" || decoded == "1",
+                                    _ => {}
+                                }
+                            }
+                        }
+
+                        let mut dispatched = false;
+                        match event_type.as_str() {
+                            "tap" => {
+                                dispatched = manager.send_phone_touch(PhoneTouchEvent {
+                                    r#type: PhoneTouchTypeEnum::TouchTap as i32,
+                                    normalized_x: x,
+                                    normalized_y: y,
+                                    end_x: x,
+                                    end_y: y,
+                                    duration_ms: 50,
+                                    scroll_dx: 0.0,
+                                    scroll_dy: 0.0,
+                                }).await;
+                            }
+                            "swipe" => {
+                                dispatched = manager.send_phone_touch(PhoneTouchEvent {
+                                    r#type: PhoneTouchTypeEnum::TouchSwipe as i32,
+                                    normalized_x: x,
+                                    normalized_y: y,
+                                    end_x,
+                                    end_y,
+                                    duration_ms,
+                                    scroll_dx: 0.0,
+                                    scroll_dy: 0.0,
+                                }).await;
+                            }
+                            "scroll" => {
+                                dispatched = manager.send_phone_touch(PhoneTouchEvent {
+                                    r#type: PhoneTouchTypeEnum::TouchScroll as i32,
+                                    normalized_x: x,
+                                    normalized_y: y,
+                                    end_x: x,
+                                    end_y: y,
+                                    duration_ms: 100,
+                                    scroll_dx,
+                                    scroll_dy,
+                                }).await;
+                            }
+                            "nav" => {
+                                let action_enum = match nav_action.to_lowercase().as_str() {
+                                    "back" => PhoneNavActionEnum::Back,
+                                    "home" => PhoneNavActionEnum::Home,
+                                    "recents" => PhoneNavActionEnum::Recents,
+                                    "notifications" => PhoneNavActionEnum::Notifications,
+                                    "lock" => PhoneNavActionEnum::Lock,
+                                    _ => PhoneNavActionEnum::Unknown,
+                                };
+                                if action_enum != PhoneNavActionEnum::Unknown {
+                                    dispatched = manager.send_phone_nav(action_enum).await;
+                                }
+                            }
+                            "text" if !text_str.is_empty() => {
+                                dispatched = manager.send_phone_text(text_str, press_enter).await;
+                            }
+                            _ => {}
+                        }
+
+                        let json = serde_json::json!({ "ok": dispatched, "type": event_type });
+                        let body = json.to_string();
+                        let header = format!(
+                            "HTTP/1.1 200 OK\r\n\
+                             Content-Type: application/json\r\n\
+                             Content-Length: {}\r\n\
+                             Access-Control-Allow-Origin: *\r\n\
+                             Connection: close\r\n\r\n",
+                            body.len()
+                        );
+                        let _ = stream.write_all(header.as_bytes()).await;
+                        let _ = stream.write_all(body.as_bytes()).await;
+                    } else if path == "/phone" || path == "/phone/" {
+                        // Interactive HTML5 Phone Mirror Viewer
+                        let html = r#"<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Continuity Hub — Phone Mirror</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <style>
+        :root {
+            --bg-color: #0b0f19;
+            --card-bg: #151c2c;
+            --accent-color: #3b82f6;
+            --accent-hover: #2563eb;
+            --border-color: #243048;
+            --text-color: #f1f5f9;
+            --text-muted: #94a3b8;
+            --phone-bezel: #1e293b;
+        }
+        * { box-sizing: border-box; margin: 0; padding: 0; user-select: none; }
+        body {
+            background: var(--bg-color);
+            color: var(--text-color);
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+        .header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            width: 100%;
+            max-width: 400px;
+            margin-bottom: 14px;
+        }
+        .brand {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            font-weight: 700;
+            font-size: 18px;
+        }
+        .badge {
+            font-size: 11px;
+            font-weight: 700;
+            padding: 3px 8px;
+            border-radius: 9999px;
+            background: #22c55e22;
+            color: #4ade80;
+            border: 1px solid #22c55e44;
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+        }
+        .badge.offline {
+            background: #ef444422;
+            color: #f87171;
+            border-color: #ef444444;
+        }
+        .badge-dot {
+            width: 6px;
+            height: 6px;
+            border-radius: 50%;
+            background: currentColor;
+        }
+        .phone-wrapper {
+            position: relative;
+            width: 360px;
+            height: 740px;
+            background: #000;
+            border-radius: 46px;
+            border: 10px solid var(--phone-bezel);
+            box-shadow: 0 25px 60px -15px rgba(0, 0, 0, 0.8), 0 0 0 1px #334155;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+        }
+        .phone-notch {
+            position: absolute;
+            top: 8px;
+            left: 50%;
+            transform: translateX(-50%);
+            width: 80px;
+            height: 18px;
+            background: #000;
+            border-radius: 12px;
+            z-index: 10;
+        }
+        .screen-container {
+            position: relative;
+            flex: 1;
+            width: 100%;
+            height: 100%;
+            background: #0f172a;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            overflow: hidden;
+        }
+        #phoneImage {
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+            display: block;
+            pointer-events: auto;
+            -webkit-user-drag: none;
+        }
+        .screen-overlay {
+            position: absolute;
+            inset: 0;
+            background: rgba(15, 23, 42, 0.85);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            padding: 24px;
+            text-align: center;
+            gap: 16px;
+            z-index: 5;
+            transition: opacity 0.2s;
+        }
+        .screen-overlay.hidden { display: none; }
+        .nav-bar {
+            height: 52px;
+            background: #0a0f1d;
+            border-top: 1px solid #1e293b;
+            display: flex;
+            align-items: center;
+            justify-content: space-around;
+            padding: 0 16px;
+            z-index: 10;
+        }
+        .nav-btn {
+            background: transparent;
+            border: none;
+            color: var(--text-muted);
+            cursor: pointer;
+            padding: 10px 14px;
+            border-radius: 10px;
+            transition: all 0.15s;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 16px;
+        }
+        .nav-btn:hover {
+            color: var(--text-color);
+            background: rgba(255, 255, 255, 0.08);
+        }
+        .nav-btn:active {
+            transform: scale(0.92);
+        }
+        .control-bar {
+            width: 100%;
+            max-width: 400px;
+            margin-top: 14px;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+        .text-input-row {
+            display: flex;
+            gap: 8px;
+            background: var(--card-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 14px;
+            padding: 6px 10px;
+        }
+        .text-input-row input {
+            flex: 1;
+            background: transparent;
+            border: none;
+            color: var(--text-color);
+            font-size: 14px;
+            outline: none;
+            padding: 4px;
+            user-select: text;
+        }
+        .text-input-row button {
+            background: var(--accent-color);
+            border: none;
+            color: white;
+            font-weight: 600;
+            font-size: 13px;
+            border-radius: 8px;
+            padding: 6px 14px;
+            cursor: pointer;
+        }
+        .text-input-row button:hover { background: var(--accent-hover); }
+        .actions-row {
+            display: flex;
+            gap: 8px;
+            justify-content: space-between;
+        }
+        .btn {
+            flex: 1;
+            padding: 10px;
+            font-size: 13px;
+            font-weight: 600;
+            border-radius: 12px;
+            border: 1px solid var(--border-color);
+            background: var(--card-bg);
+            color: var(--text-color);
+            cursor: pointer;
+            transition: background 0.15s;
+            text-align: center;
+        }
+        .btn:hover { background: #1e293b; }
+        .btn.primary {
+            background: var(--accent-color);
+            border-color: var(--accent-color);
+            color: white;
+        }
+        .btn.primary:hover { background: var(--accent-hover); }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <div class="brand">
+            <span>📱 Phone Mirror</span>
+            <span id="statusBadge" class="badge"><span class="badge-dot"></span> <span id="statusText">Ready</span></span>
+        </div>
+        <div style="font-size: 12px; color: var(--text-muted);" id="fpsCounter">30 FPS</div>
+    </div>
+
+    <div class="phone-wrapper">
+        <div class="phone-notch"></div>
+        <div class="screen-container" id="screenContainer">
+            <div id="overlay" class="screen-overlay">
+                <div style="font-size: 40px;">📱</div>
+                <div style="font-weight: 600; font-size: 16px;">Wireless Phone Mirroring</div>
+                <div style="font-size: 13px; color: var(--text-muted); max-width: 260px;">
+                    Control your phone with your laptop mouse, keyboard, and gestures without scrcpy or cables.
+                </div>
+                <button class="btn primary" id="btnStartOverlay" style="padding: 12px 24px; font-size: 14px;">
+                    Start Mirroring
+                </button>
+            </div>
+            <img id="phoneImage" src="/phone/stream.mjpg" alt="Phone Screen" draggable="false" />
+        </div>
+        <div class="nav-bar">
+            <button class="nav-btn" id="btnBack" title="Back (Escape)">◀</button>
+            <button class="nav-btn" id="btnHome" title="Home">⚪</button>
+            <button class="nav-btn" id="btnRecents" title="Recents">◽</button>
+            <button class="nav-btn" id="btnNotif" title="Notifications">🔔</button>
+            <button class="nav-btn" id="btnLock" title="Lock Screen">🔒</button>
+        </div>
+    </div>
+
+    <div class="control-bar">
+        <div class="text-input-row">
+            <input type="text" id="phoneTextInput" placeholder="Type text to phone (press Enter)..." autocomplete="off" />
+            <button id="btnSendText">Send</button>
+        </div>
+        <div class="actions-row">
+            <button class="btn" id="btnToggleMirror">▶ Start Mirroring</button>
+            <button class="btn" id="btnRefreshStream">🔄 Reconnect</button>
+        </div>
+    </div>
+
+    <script>
+        const phoneImg = document.getElementById('phoneImage');
+        const overlay = document.getElementById('overlay');
+        const statusBadge = document.getElementById('statusBadge');
+        const statusText = document.getElementById('statusText');
+        const fpsCounter = document.getElementById('fpsCounter');
+        const btnToggleMirror = document.getElementById('btnToggleMirror');
+        const btnStartOverlay = document.getElementById('btnStartOverlay');
+        const btnRefreshStream = document.getElementById('btnRefreshStream');
+        const textInput = document.getElementById('phoneTextInput');
+        const btnSendText = document.getElementById('btnSendText');
+
+        let isMirroring = false;
+
+        async function sendInput(params) {
+            try {
+                await fetch('/phone/input', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(params)
+                });
+            } catch (e) {
+                console.error("Input send error:", e);
+            }
+        }
+
+        async function startMirror() {
+            try {
+                const res = await fetch('/phone/start');
+                const data = await res.json();
+                if (data.ok) {
+                    isMirroring = true;
+                    overlay.classList.add('hidden');
+                    btnToggleMirror.textContent = '⏹ Stop Mirroring';
+                    statusText.textContent = 'Mirroring';
+                    statusBadge.classList.remove('offline');
+                    phoneImg.src = '/phone/stream.mjpg?t=' + Date.now();
+                }
+            } catch (e) {
+                console.error("Start mirror error:", e);
+            }
+        }
+
+        async function stopMirror() {
+            try {
+                await fetch('/phone/stop');
+                isMirroring = false;
+                overlay.classList.remove('hidden');
+                btnToggleMirror.textContent = '▶ Start Mirroring';
+                statusText.textContent = 'Stopped';
+            } catch (e) {
+                console.error("Stop mirror error:", e);
+            }
+        }
+
+        btnToggleMirror.onclick = () => isMirroring ? stopMirror() : startMirror();
+        btnStartOverlay.onclick = startMirror;
+        btnRefreshStream.onclick = () => {
+            phoneImg.src = '/phone/stream.mjpg?t=' + Date.now();
+        };
+
+        // Navigation Actions
+        document.getElementById('btnBack').onclick = () => sendInput({ type: 'nav', action: 'back' });
+        document.getElementById('btnHome').onclick = () => sendInput({ type: 'nav', action: 'home' });
+        document.getElementById('btnRecents').onclick = () => sendInput({ type: 'nav', action: 'recents' });
+        document.getElementById('btnNotif').onclick = () => sendInput({ type: 'nav', action: 'notifications' });
+        document.getElementById('btnLock').onclick = () => sendInput({ type: 'nav', action: 'lock' });
+
+        // Text Injection
+        function sendCurrentText() {
+            const val = textInput.value;
+            if (!val) return;
+            sendInput({ type: 'text', text: val, enter: true });
+            textInput.value = '';
+        }
+        btnSendText.onclick = sendCurrentText;
+        textInput.onkeydown = (e) => {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                sendCurrentText();
+            }
+        };
+
+        // Touch & Mouse Gesture Dispatch
+        let isPointerDown = false;
+        let startX = 0, startY = 0, startTime = 0;
+
+        function getNormalizedCoords(e) {
+            const rect = phoneImg.getBoundingClientRect();
+            const x = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+            const y = Math.max(0, Math.min(1, (e.clientY - rect.top) / rect.height));
+            return { x, y };
+        }
+
+        phoneImg.addEventListener('mousedown', (e) => {
+            e.preventDefault();
+            isPointerDown = true;
+            const coords = getNormalizedCoords(e);
+            startX = coords.x;
+            startY = coords.y;
+            startTime = Date.now();
+        });
+
+        window.addEventListener('mouseup', (e) => {
+            if (!isPointerDown) return;
+            isPointerDown = false;
+
+            const coords = getNormalizedCoords(e);
+            const endX = coords.x;
+            const endY = coords.y;
+            const duration = Math.max(50, Date.now() - startTime);
+
+            const distSq = (endX - startX) * (endX - startX) + (endY - startY) * (endY - startY);
+            if (distSq < 0.0004) { // Small movement threshold (~2%) -> Tap
+                sendInput({ type: 'tap', x: startX, y: startY });
+            } else { // Swipe
+                sendInput({
+                    type: 'swipe',
+                    x: startX,
+                    y: startY,
+                    end_x: endX,
+                    end_y: endY,
+                    duration: Math.min(500, duration)
+                });
+            }
+        });
+
+        phoneImg.addEventListener('wheel', (e) => {
+            e.preventDefault();
+            const coords = getNormalizedCoords(e);
+            const scrollDy = e.deltaY > 0 ? 100 : -100;
+            sendInput({
+                type: 'scroll',
+                x: coords.x,
+                y: coords.y,
+                scroll_dy: scrollDy
+            });
+        }, { passive: false });
+
+        // Global hotkeys (Escape -> Back)
+        window.addEventListener('keydown', (e) => {
+            if (e.target.tagName === 'INPUT') return;
+            if (e.key === 'Escape') {
+                sendInput({ type: 'nav', action: 'back' });
+            }
+        });
+
+        // Periodic status polling
+        setInterval(async () => {
+            try {
+                const res = await fetch('/phone/status');
+                const data = await res.json();
+                if (data.is_mirroring) {
+                    overlay.classList.add('hidden');
+                    btnToggleMirror.textContent = '⏹ Stop Mirroring';
+                    statusText.textContent = 'Live';
+                    statusBadge.classList.remove('offline');
+                    fpsCounter.textContent = `${data.fps} FPS (${data.width}x${data.height})`;
+                    isMirroring = true;
+                } else if (isMirroring) {
+                    fpsCounter.textContent = '0 FPS';
+                }
+            } catch (_) {}
+        }, 1500);
+    </script>
+</body>
+</html>"#;
+                        let header = format!(
+                            "HTTP/1.1 200 OK\r\n\
+                             Content-Type: text/html; charset=utf-8\r\n\
+                             Content-Length: {}\r\n\
+                             Connection: close\r\n\r\n",
+                            html.len()
+                        );
+                        let _ = stream.write_all(header.as_bytes()).await;
+                        let _ = stream.write_all(html.as_bytes()).await;
                     } else if path.starts_with("/snapshot.jpg") {
                         let frame_opt = manager.latest_frame.read().await.clone();
                         if let Some(frame) = frame_opt {
@@ -219,6 +941,8 @@ impl CameraManager {
         .container {{ display: flex; flex-direction: column; align-items: center; background: #1e293b; padding: 24px; border-radius: 16px; box-shadow: 0 10px 25px rgba(0,0,0,0.5); max-width: 90vw; }}
         img {{ border-radius: 12px; max-width: 100%; height: auto; border: 1px solid #334155; }}
         .endpoints {{ margin-top: 16px; font-family: monospace; font-size: 13px; color: #94a3b8; }}
+        a {{ color: #38bdf8; text-decoration: none; font-weight: 600; }}
+        a:hover {{ text-decoration: underline; }}
     </style>
 </head>
 <body>
@@ -229,6 +953,7 @@ impl CameraManager {
         <div class="endpoints">
             <p>MJPEG Stream URL: <code>http://127.0.0.1:{}/live.mjpg</code></p>
             <p>Single Snapshot URL: <code>http://127.0.0.1:{}/snapshot.jpg</code></p>
+            <p style="margin-top: 12px;">📱 Looking for Phone Mirroring? <a href="/phone">Open Interactive Phone Mirror</a></p>
         </div>
     </div>
 </body>
@@ -303,6 +1028,21 @@ impl CameraManager {
     }
 
     async fn handle_camera_frame(&self, frame: CameraFrame, _peer_name: &str) {
+        if frame.is_phone_screen {
+            self.is_phone_mirror_streaming.store(true, Ordering::Relaxed);
+            self.phone_fps_counter.fetch_add(1, Ordering::Relaxed);
+
+            *self.phone_width.write().await = frame.width;
+            *self.phone_height.write().await = frame.height;
+
+            let frame_data = frame.frame_data.clone();
+            *self.latest_phone_frame.write().await = Some(frame);
+
+            // Broadcast to Phone Mirror HTTP stream clients
+            let _ = self.phone_frame_tx.send(frame_data);
+            return;
+        }
+
         self.is_streaming.store(true, Ordering::Relaxed);
         self.fps_counter.fetch_add(1, Ordering::Relaxed);
 
@@ -532,6 +1272,14 @@ impl CameraManager {
                 info!("Updated camera stream rotation to {}°", control.rotation_degrees);
                 self.current_rotation.store(control.rotation_degrees, Ordering::Relaxed);
             }
+            CameraAction::StartPhoneMirror => {
+                info!("Received StartPhoneMirror command");
+                self.is_phone_mirror_streaming.store(true, Ordering::Relaxed);
+            }
+            CameraAction::StopPhoneMirror => {
+                info!("Received StopPhoneMirror command");
+                self.is_phone_mirror_streaming.store(false, Ordering::Relaxed);
+            }
             _ => {}
         }
 
@@ -603,4 +1351,163 @@ impl CameraManager {
             let _ = tx.send(packet).await;
         }
     }
+
+    pub async fn start_phone_mirror(&self) -> bool {
+        info!("Sending StartPhoneMirror command to Android peer...");
+        let cmd = CameraControlCommand {
+            action: CameraAction::StartPhoneMirror as i32,
+            lens: Lens::Back as i32,
+            torch: false,
+            zoom_ratio: 1.0,
+            width: 720,
+            height: 1600,
+            rotation_degrees: 0,
+            touch_x: 0.0,
+            touch_y: 0.0,
+        };
+        let msg = CameraMessage {
+            msg: Some(Msg::Control(cmd)),
+        };
+        let mut bytes = Vec::new();
+        if msg.encode(&mut bytes).is_err() {
+            return false;
+        }
+        let packet = Packet {
+            session_id: self.my_device_id.clone(),
+            sequence_number: 1,
+            channel: Channel::Camera as i32,
+            payload: bytes,
+        };
+        self.is_phone_mirror_streaming.store(true, Ordering::Relaxed);
+        let guard = self.active_peer_tx.read().await;
+        if let Some(ref tx) = *guard {
+            tx.send(packet).await.is_ok()
+        } else {
+            false
+        }
+    }
+
+    pub async fn stop_phone_mirror(&self) -> bool {
+        info!("Sending StopPhoneMirror command to Android peer...");
+        let cmd = CameraControlCommand {
+            action: CameraAction::StopPhoneMirror as i32,
+            lens: Lens::Back as i32,
+            torch: false,
+            zoom_ratio: 1.0,
+            width: 0,
+            height: 0,
+            rotation_degrees: 0,
+            touch_x: 0.0,
+            touch_y: 0.0,
+        };
+        let msg = CameraMessage {
+            msg: Some(Msg::Control(cmd)),
+        };
+        let mut bytes = Vec::new();
+        if msg.encode(&mut bytes).is_err() {
+            return false;
+        }
+        let packet = Packet {
+            session_id: self.my_device_id.clone(),
+            sequence_number: 1,
+            channel: Channel::Camera as i32,
+            payload: bytes,
+        };
+        self.is_phone_mirror_streaming.store(false, Ordering::Relaxed);
+        let guard = self.active_peer_tx.read().await;
+        if let Some(ref tx) = *guard {
+            tx.send(packet).await.is_ok()
+        } else {
+            false
+        }
+    }
+
+    pub async fn send_phone_touch(&self, event: PhoneTouchEvent) -> bool {
+        let input_msg = InputMessage {
+            event: Some(InputEvent::PhoneTouch(event)),
+        };
+        let mut bytes = Vec::new();
+        if input_msg.encode(&mut bytes).is_err() {
+            return false;
+        }
+        let packet = Packet {
+            session_id: self.my_device_id.clone(),
+            sequence_number: 1,
+            channel: Channel::Input as i32,
+            payload: bytes,
+        };
+        let guard = self.active_peer_tx.read().await;
+        if let Some(ref tx) = *guard {
+            tx.send(packet).await.is_ok()
+        } else {
+            false
+        }
+    }
+
+    pub async fn send_phone_nav(&self, action: PhoneNavActionEnum) -> bool {
+        let input_msg = InputMessage {
+            event: Some(InputEvent::PhoneNav(PhoneNavAction {
+                action: action as i32,
+            })),
+        };
+        let mut bytes = Vec::new();
+        if input_msg.encode(&mut bytes).is_err() {
+            return false;
+        }
+        let packet = Packet {
+            session_id: self.my_device_id.clone(),
+            sequence_number: 1,
+            channel: Channel::Input as i32,
+            payload: bytes,
+        };
+        let guard = self.active_peer_tx.read().await;
+        if let Some(ref tx) = *guard {
+            tx.send(packet).await.is_ok()
+        } else {
+            false
+        }
+    }
+
+    pub async fn send_phone_text(&self, text: String, press_enter: bool) -> bool {
+        let input_msg = InputMessage {
+            event: Some(InputEvent::PhoneText(PhoneTextAction {
+                text,
+                press_enter,
+            })),
+        };
+        let mut bytes = Vec::new();
+        if input_msg.encode(&mut bytes).is_err() {
+            return false;
+        }
+        let packet = Packet {
+            session_id: self.my_device_id.clone(),
+            sequence_number: 1,
+            channel: Channel::Input as i32,
+            payload: bytes,
+        };
+        let guard = self.active_peer_tx.read().await;
+        if let Some(ref tx) = *guard {
+            tx.send(packet).await.is_ok()
+        } else {
+            false
+        }
+    }
+}
+
+fn url_decode(s: &str) -> String {
+    let mut result = String::new();
+    let mut chars = s.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '%' {
+            let hex: String = chars.by_ref().take(2).collect();
+            if let Ok(byte) = u8::from_str_radix(&hex, 16) {
+                result.push(byte as char);
+            }
+        } else if c == '+' {
+            result.push(' ');
+        } else {
+            result.push(c);
+        }
+    }
+    result
 }

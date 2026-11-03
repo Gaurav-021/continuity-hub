@@ -50,7 +50,8 @@ continuity-hub/
 │           └── java/com/continuityhub/
 │               ├── MainActivity.kt        # Jetpack Compose UI (Bottom Navigation: Hub, Trackpad, Media, Camera)
 │               ├── ui/                    # TrackpadScreen, MediaScreen, CameraScreen & M3 Theme
-│               ├── camera/                # AndroidCameraManager (Camera2 API, Sidecar & Desktop mirror)
+│               ├── camera/                # AndroidCameraManager (Camera2 API, Sidecar & Desktop mirror) & AndroidPhoneMirrorManager
+│               ├── input/                 # ContinuityAccessibilityService (Universal touch, gestures & nav dispatch)
 │               ├── media/                 # AndroidMediaManager (MediaSessionManager & transport controls)
 │               ├── telephony/             # Call state monitor, SMS receiver & telemetry monitor
 │               ├── service/               # Foreground Service (ContinuityService)
@@ -159,10 +160,10 @@ adb reverse tcp:52800 tcp:52800 && adb forward tcp:52801 tcp:52801
 | `3` | `CHANNEL_FILE_TRANSFER` | 64KB Chunks | High-throughput file drop with progressive SHA-256 verification and atomic `.part` rename. |
 | `4` | `CHANNEL_NOTIFICATIONS` | D-Bus / Android Listener | Cross-device notification mirroring with native D-Bus actions (Quick Reply, Dismiss). |
 | `5` | `CHANNEL_HEARTBEAT` | Periodic Ping | Connection keepalive and latency monitoring. |
-| `6` | `CHANNEL_INPUT` | `zwlr` pointer / `wtype` | Relative trackpad gestures (1-finger drag, tap, 2-finger scroll) and virtual keyboard shortcuts. |
+| `6` | `CHANNEL_INPUT` | `zwlr` pointer / `wtype` / A11y | Relative trackpad gestures (1-finger drag, tap, 2-finger scroll), virtual keyboard shortcuts, and Android remote touch/gesture dispatch. |
 | `7` | `CHANNEL_TELEPHONY` | Telecom / SmsReceiver | Ringing alerts (Mute/Decline/SMS-decline), SMS bridge, and `/tmp/continuity-waybar.json` telemetry. |
 | `8` | `CHANNEL_MEDIA` | MPRIS 2.2 / MediaSession | Virtual D-Bus player (`org.mpris.MediaPlayer2.ContinuityPhone`), metadata sync, and Smart Call Ducking. |
-| `9` | `CHANNEL_CAMERA` | Camera2 / HTTP MJPEG / Sidecar | Wireless webcam (`http://127.0.0.1:52802/live.mjpg`), V4L2 virtual webcam (`/dev/video10`), desktop screencast, and Apple Sidecar extended display. |
+| `9` | `CHANNEL_CAMERA` | Camera2 / HTTP MJPEG / Sidecar / Mirror | Wireless webcam (`http://127.0.0.1:52802/live.mjpg`), V4L2 virtual webcam (`/dev/video10`), desktop screencast, Apple Sidecar extended display, and native Phone Mirroring (`http://127.0.0.1:52802/phone`). |
 
 ---
 

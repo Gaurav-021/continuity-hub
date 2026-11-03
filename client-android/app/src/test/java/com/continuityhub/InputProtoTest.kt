@@ -7,6 +7,9 @@ import com.continuityhub.proto.MouseButtonEvent
 import com.continuityhub.proto.MouseMoveEvent
 import com.continuityhub.proto.MouseScrollEvent
 import com.continuityhub.proto.Packet
+import com.continuityhub.proto.PhoneNavAction
+import com.continuityhub.proto.PhoneTextAction
+import com.continuityhub.proto.PhoneTouchEvent
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -94,5 +97,58 @@ class InputProtoTest {
         assertTrue(parsedInput.hasKeyEvent())
         assertEquals("Escape", parsedInput.keyEvent.keyName)
         assertEquals(listOf("ctrl"), parsedInput.keyEvent.modifiersList)
+    }
+
+    @Test
+    fun testPhoneTouchTapAndSwipeSerialization() {
+        val tap = PhoneTouchEvent.newBuilder()
+            .setType(PhoneTouchEvent.TouchType.TOUCH_TAP)
+            .setNormalizedX(0.5f)
+            .setNormalizedY(0.75f)
+            .build()
+        val msgTap = InputMessage.newBuilder().setPhoneTouch(tap).build()
+        val parsedTap = InputMessage.parseFrom(msgTap.toByteArray())
+        assertTrue(parsedTap.hasPhoneTouch())
+        assertEquals(PhoneTouchEvent.TouchType.TOUCH_TAP, parsedTap.phoneTouch.type)
+        assertEquals(0.5f, parsedTap.phoneTouch.normalizedX, 0.001f)
+        assertEquals(0.75f, parsedTap.phoneTouch.normalizedY, 0.001f)
+
+        val swipe = PhoneTouchEvent.newBuilder()
+            .setType(PhoneTouchEvent.TouchType.TOUCH_SWIPE)
+            .setNormalizedX(0.5f)
+            .setNormalizedY(0.8f)
+            .setEndX(0.5f)
+            .setEndY(0.2f)
+            .setDurationMs(250)
+            .build()
+        val msgSwipe = InputMessage.newBuilder().setPhoneTouch(swipe).build()
+        val parsedSwipe = InputMessage.parseFrom(msgSwipe.toByteArray())
+        assertTrue(parsedSwipe.hasPhoneTouch())
+        assertEquals(PhoneTouchEvent.TouchType.TOUCH_SWIPE, parsedSwipe.phoneTouch.type)
+        assertEquals(250, parsedSwipe.phoneTouch.durationMs)
+    }
+
+    @Test
+    fun testPhoneNavActionSerialization() {
+        val nav = PhoneNavAction.newBuilder()
+            .setAction(PhoneNavAction.Action.ACTION_BACK)
+            .build()
+        val msg = InputMessage.newBuilder().setPhoneNav(nav).build()
+        val parsed = InputMessage.parseFrom(msg.toByteArray())
+        assertTrue(parsed.hasPhoneNav())
+        assertEquals(PhoneNavAction.Action.ACTION_BACK, parsed.phoneNav.action)
+    }
+
+    @Test
+    fun testPhoneTextActionSerialization() {
+        val textAction = PhoneTextAction.newBuilder()
+            .setText("Hello Continuity!")
+            .setPressEnter(true)
+            .build()
+        val msg = InputMessage.newBuilder().setPhoneText(textAction).build()
+        val parsed = InputMessage.parseFrom(msg.toByteArray())
+        assertTrue(parsed.hasPhoneText())
+        assertEquals("Hello Continuity!", parsed.phoneText.text)
+        assertTrue(parsed.phoneText.pressEnter)
     }
 }

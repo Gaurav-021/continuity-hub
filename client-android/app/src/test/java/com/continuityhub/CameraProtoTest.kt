@@ -89,6 +89,44 @@ class CameraProtoTest {
     }
 
     @Test
+    fun testPhoneMirrorFrameSerialization() {
+        val dummyData = byteArrayOf(0x10, 0x20, 0x30)
+        val frame = CameraFrame.newBuilder()
+            .setFrameIndex(1L)
+            .setTimestampUs(1000L)
+            .setWidth(1080)
+            .setHeight(2400)
+            .setFrameData(ByteString.copyFrom(dummyData))
+            .setIsKeyframe(true)
+            .setIsPhoneScreen(true)
+            .build()
+
+        val msg = CameraMessage.newBuilder().setFrame(frame).build()
+        val parsed = CameraMessage.parseFrom(msg.toByteArray())
+        assertTrue(parsed.hasFrame())
+        assertTrue(parsed.frame.isPhoneScreen)
+        assertEquals(1080, parsed.frame.width)
+        assertEquals(2400, parsed.frame.height)
+    }
+
+    @Test
+    fun testPhoneMirrorControlCommands() {
+        val startCmd = CameraControlCommand.newBuilder()
+            .setAction(CameraControlCommand.Action.ACTION_START_PHONE_MIRROR)
+            .build()
+        val startMsg = CameraMessage.newBuilder().setControl(startCmd).build()
+        val parsedStart = CameraMessage.parseFrom(startMsg.toByteArray())
+        assertEquals(CameraControlCommand.Action.ACTION_START_PHONE_MIRROR, parsedStart.control.action)
+
+        val stopCmd = CameraControlCommand.newBuilder()
+            .setAction(CameraControlCommand.Action.ACTION_STOP_PHONE_MIRROR)
+            .build()
+        val stopMsg = CameraMessage.newBuilder().setControl(stopCmd).build()
+        val parsedStop = CameraMessage.parseFrom(stopMsg.toByteArray())
+        assertEquals(CameraControlCommand.Action.ACTION_STOP_PHONE_MIRROR, parsedStop.control.action)
+    }
+
+    @Test
     fun testCameraSnapshotSerialization() {
         val dummyData = byteArrayOf(0x01, 0x02, 0x03, 0x04, 0x05)
         val snapshot = CameraSnapshot.newBuilder()

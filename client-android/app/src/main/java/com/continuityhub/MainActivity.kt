@@ -170,6 +170,27 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private val mediaProjectionLauncher = registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        if (result.resultCode == RESULT_OK && result.data != null) {
+            ContinuityService.startPhoneMirror(result.resultCode, result.data!!)
+            Toast.makeText(this, "Phone Mirroring started", Toast.LENGTH_SHORT).show()
+        } else {
+            ContinuityService.stopPhoneMirror()
+            Toast.makeText(this, "Screen capture permission declined", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    private fun requestMediaProjection() {
+        val mpManager = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as? android.media.projection.MediaProjectionManager
+        if (mpManager != null) {
+            mediaProjectionLauncher.launch(mpManager.createScreenCaptureIntent())
+        } else {
+            Toast.makeText(this, "Screen capture not supported", Toast.LENGTH_SHORT).show()
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
@@ -265,6 +286,19 @@ class MainActivity : ComponentActivity() {
                                     Manifest.permission.READ_CONTACTS
                                 )
                             )
+                        },
+                        onRequestPhoneMirror = { requestMediaProjection() },
+                        onStopPhoneMirror = {
+                            ContinuityService.stopPhoneMirror()
+                            Toast.makeText(this, "Phone Mirroring stopped", Toast.LENGTH_SHORT).show()
+                        },
+                        onOpenAccessibilitySettings = {
+                            try {
+                                val intent = Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)
+                                startActivity(intent)
+                            } catch (e: Exception) {
+                                Toast.makeText(this, "Cannot open accessibility settings: ${e.message}", Toast.LENGTH_SHORT).show()
+                            }
                         }
                     )
                 }
@@ -419,7 +453,10 @@ fun ContinuityApp(
     onSendTestAlert: () -> Unit,
     onTestCallAlert: () -> Unit,
     onTestSmsAlert: () -> Unit,
-    onRequestTelephonyPermissions: () -> Unit
+    onRequestTelephonyPermissions: () -> Unit,
+    onRequestPhoneMirror: () -> Unit,
+    onStopPhoneMirror: () -> Unit,
+    onOpenAccessibilitySettings: () -> Unit
 ) {
     val context = LocalContext.current
     val deviceConfig by ContinuityService.deviceConfigState.collectAsState()
@@ -431,6 +468,15 @@ fun ContinuityApp(
     val notifications by ContinuityService.notificationsState.collectAsState()
     val telemetry by ContinuityService.telemetryState.collectAsState()
     val sasCode by ContinuityService.sasCodeState.collectAsState()
+    val isPhoneMirroring by ContinuityService.isPhoneMirroringState.collectAsState()
+    val phoneMirrorRequested by ContinuityService.phoneMirrorRequestedState.collectAsState()
+    var isAccessibilityGranted by remember { mutableStateOf(ContinuityService.isAccessibilityGranted()) }
+
+    androidx.compose.runtime.LaunchedEffect(phoneMirrorRequested) {
+        if (phoneMirrorRequested && !isPhoneMirroring) {
+            onRequestPhoneMirror()
+        }
+    }
     val clipboardSyncEnabled by ContinuityService.clipboardSyncEnabledState.collectAsState()
     val clipboardOutboundEnabled by ContinuityService.clipboardOutboundEnabledState.collectAsState()
     val clipboardInboundEnabled by ContinuityService.clipboardInboundEnabledState.collectAsState()
@@ -657,11 +703,19 @@ fun ContinuityApp(
                             }
                         }
 
-                        // 3. Clean Quick Action Tiles (Files, Trackpad, Sidecar, Media)
+                        // 3. Clean Quick Action Tiles (Files, Trackpad, Phone Mirror, Touch, Sidecar, Media)
                         item {
                             QuickActionsGrid(
                                 isConnected = isConnected,
+                                isPhoneMirroring = isPhoneMirroring,
+                                isAccessibilityGranted = isAccessibilityGranted,
                                 onSendFile = { filePickerLauncher.launch("*/*") },
+                                onRequestPhoneMirror = onRequestPhoneMirror,
+                                onStopPhoneMirror = onStopPhoneMirror,
+                                onOpenAccessibilitySettings = {
+                                    onOpenAccessibilitySettings()
+                                    isAccessibilityGranted = ContinuityService.isAccessibilityGranted()
+                                },
                                 onNavigateTab = { selectedTab = it }
                             )
                         }
@@ -695,13 +749,18 @@ fun ContinuityApp(
                         }
 
                         // 6. Permissions Setup Card (ONLY shown if permissions are missing)
-                        if (!isNotificationListenerEnabled || !hasTelephonyPermissions) {
+                        if (!isNotificationListenerEnabled || !hasTelephonyPermissions || !isAccessibilityGranted) {
                             item {
                                 SetupPermissionsBanner(
                                     needsNotification = !isNotificationListenerEnabled,
                                     needsTelephony = !hasTelephonyPermissions,
+                                    needsAccessibility = !isAccessibilityGranted,
                                     onOpenNotificationSettings = onOpenNotificationSettings,
-                                    onRequestTelephonyPermissions = onRequestTelephonyPermissions
+                                    onRequestTelephonyPermissions = onRequestTelephonyPermissions,
+                                    onOpenAccessibilitySettings = {
+                                        onOpenAccessibilitySettings()
+                                        isAccessibilityGranted = ContinuityService.isAccessibilityGranted()
+                                    }
                                 )
                             }
                         }
@@ -1231,12 +1290,17 @@ fun DiscoveredPeersCard(
 }
 
 // -------------------------------------------------------------
-// Component: Quick Actions 2x2 Grid (Google Quick Settings style)
+// Component: Quick Actions Grid (Google Quick Settings style)
 // -------------------------------------------------------------
 @Composable
 fun QuickActionsGrid(
     isConnected: Boolean,
+    isPhoneMirroring: Boolean,
+    isAccessibilityGranted: Boolean,
     onSendFile: () -> Unit,
+    onRequestPhoneMirror: () -> Unit,
+    onStopPhoneMirror: () -> Unit,
+    onOpenAccessibilitySettings: () -> Unit,
     onNavigateTab: (Int) -> Unit
 ) {
     Column(
@@ -1262,6 +1326,33 @@ fun QuickActionsGrid(
                 isPrimary = false,
                 modifier = Modifier.weight(1f),
                 onClick = { onNavigateTab(1) }
+            )
+        }
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            QuickActionTile(
+                title = if (isPhoneMirroring) "Stop Mirror" else "Phone Mirror",
+                subtitle = if (isPhoneMirroring) "Streaming to PC" else "Control on laptop",
+                icon = Icons.Default.DesktopWindows,
+                isPrimary = isPhoneMirroring,
+                modifier = Modifier.weight(1f),
+                onClick = {
+                    if (isPhoneMirroring) {
+                        onStopPhoneMirror()
+                    } else {
+                        onRequestPhoneMirror()
+                    }
+                }
+            )
+            QuickActionTile(
+                title = "Touch Control",
+                subtitle = if (isAccessibilityGranted) "Active" else "Setup required",
+                icon = Icons.Default.TouchApp,
+                isPrimary = isAccessibilityGranted,
+                modifier = Modifier.weight(1f),
+                onClick = onOpenAccessibilitySettings
             )
         }
         Row(
@@ -1694,8 +1785,10 @@ fun NotificationSyncCard(
 fun SetupPermissionsBanner(
     needsNotification: Boolean,
     needsTelephony: Boolean,
+    needsAccessibility: Boolean,
     onOpenNotificationSettings: () -> Unit,
-    onRequestTelephonyPermissions: () -> Unit
+    onRequestTelephonyPermissions: () -> Unit,
+    onOpenAccessibilitySettings: () -> Unit
 ) {
     Card(
         modifier = Modifier.fillMaxWidth(),
@@ -1730,7 +1823,9 @@ fun SetupPermissionsBanner(
                     fontWeight = FontWeight.SemiBold
                 )
                 Text(
-                    text = if (needsNotification && needsTelephony)
+                    text = if (needsAccessibility)
+                        "Enable Continuity Accessibility service to allow mouse gestures & keyboard typing on phone."
+                    else if (needsNotification && needsTelephony)
                         "Allow notification mirroring and phone call alerts on PC."
                     else if (needsNotification)
                         "Allow notification mirroring to your desktop."
@@ -1743,7 +1838,9 @@ fun SetupPermissionsBanner(
             Spacer(modifier = Modifier.width(8.dp))
             Button(
                 onClick = {
-                    if (needsNotification) {
+                    if (needsAccessibility) {
+                        onOpenAccessibilitySettings()
+                    } else if (needsNotification) {
                         onOpenNotificationSettings()
                     } else {
                         onRequestTelephonyPermissions()

@@ -271,6 +271,11 @@ impl InputManager {
                 crate::proto::input_message::Event::KeyEvent(k) => {
                     self.handle_key_event(k).await;
                 }
+                crate::proto::input_message::Event::PhoneTouch(_)
+                | crate::proto::input_message::Event::PhoneNav(_)
+                | crate::proto::input_message::Event::PhoneText(_) => {
+                    // Desktop-to-phone mirror events are processed on the Android client
+                }
             }
         }
     }

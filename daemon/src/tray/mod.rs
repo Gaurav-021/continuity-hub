@@ -241,7 +241,11 @@ impl StatusNotifierItem {
     }
 
     async fn secondary_activate(&self, _x: i32, _y: i32) {
-        info!("Tray icon secondary activated (middle-click)");
+        info!("Tray icon secondary activated (middle-click) — opening Phone Mirroring viewer");
+        #[cfg(target_os = "linux")]
+        let _ = tokio::process::Command::new("xdg-open")
+            .arg("http://127.0.0.1:52802/phone")
+            .spawn();
     }
 
     async fn scroll(&self, _delta: i32, _orientation: &str) {

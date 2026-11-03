@@ -52,6 +52,7 @@ async fn test_camera_manager_frame_and_config() {
         height: 1080,
         frame_data: dummy_jpeg.clone(),
         is_keyframe: true,
+        is_phone_screen: false,
     };
 
     camera_mgr
@@ -131,4 +132,89 @@ async fn test_camera_http_stream_server() {
     assert!(response_str.contains("HTTP/1.1 200 OK"));
     assert!(response_str.contains("\"mjpeg_url\""));
     assert!(response_str.contains("\"snapshot_url\""));
+}
+
+#[tokio::test]
+async fn test_phone_mirror_endpoints_and_input() {
+    let port = 52893;
+    let camera_mgr = CameraManager::with_port("desktop-phone-mirror-test".to_string(), port);
+    camera_mgr
+        .start_http_stream_server()
+        .await
+        .expect("Server must start");
+
+    tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+
+    // 1. Send Phone Screen Frame
+    let (peer_tx, mut peer_rx) = mpsc::channel::<Packet>(16);
+    camera_mgr.set_peer_tx(peer_tx.clone()).await;
+
+    let dummy_screen_jpeg = vec![0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10, 0x4A, 0x46, 0x00, 0x01];
+    let frame = CameraFrame {
+        frame_index: 42,
+        timestamp_us: 2000000,
+        width: 1080,
+        height: 2400,
+        frame_data: dummy_screen_jpeg.clone(),
+        is_keyframe: true,
+        is_phone_screen: true,
+    };
+
+    camera_mgr
+        .handle_message(
+            CameraMessage {
+                msg: Some(Msg::Frame(frame)),
+            },
+            "Pixel 9 Pro",
+            peer_tx,
+        )
+        .await;
+
+    // 2. Query GET /phone/status
+    let mut stream = TcpStream::connect(format!("127.0.0.1:{}", port))
+        .await
+        .expect("Must connect to HTTP server");
+
+    stream
+        .write_all(b"GET /phone/status HTTP/1.1\r\nHost: localhost\r\n\r\n")
+        .await
+        .unwrap();
+
+    let mut buf = [0u8; 1024];
+    let n = stream.read(&mut buf).await.unwrap();
+    let resp = String::from_utf8_lossy(&buf[..n]);
+    assert!(resp.contains("HTTP/1.1 200 OK"));
+    assert!(resp.contains("\"is_mirroring\":true"));
+    assert!(resp.contains("\"width\":1080"));
+    assert!(resp.contains("\"height\":2400"));
+
+    // 3. Query GET /phone HTML5 Viewer
+    let mut stream2 = TcpStream::connect(format!("127.0.0.1:{}", port)).await.unwrap();
+    stream2
+        .write_all(b"GET /phone HTTP/1.1\r\nHost: localhost\r\n\r\n")
+        .await
+        .unwrap();
+    let n2 = stream2.read(&mut buf).await.unwrap();
+    let resp2 = String::from_utf8_lossy(&buf[..n2]);
+    assert!(resp2.contains("HTTP/1.1 200 OK"));
+    assert!(resp2.contains("Phone Mirror"));
+
+    // 4. Send POST /phone/input with tap JSON
+    let mut stream3 = TcpStream::connect(format!("127.0.0.1:{}", port)).await.unwrap();
+    let body = r#"{"type":"tap","x":0.5,"y":0.8}"#;
+    let req = format!(
+        "POST /phone/input HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+        body.len(),
+        body
+    );
+    stream3.write_all(req.as_bytes()).await.unwrap();
+
+    let n3 = stream3.read(&mut buf).await.unwrap();
+    let resp3 = String::from_utf8_lossy(&buf[..n3]);
+    assert!(resp3.contains("HTTP/1.1 200 OK"));
+    assert!(resp3.contains("\"ok\":true"));
+
+    // Verify packet was dispatched to peer receiver channel
+    let packet = peer_rx.recv().await.expect("Must receive input packet");
+    assert_eq!(packet.channel, Channel::Input as i32);
 }
