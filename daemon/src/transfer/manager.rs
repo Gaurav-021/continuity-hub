@@ -90,7 +90,7 @@ pub fn show_file_received_notification(
 
 struct ActiveIncomingTransfer {
     header: FileTransferHeader,
-    file: File,
+    file: tokio::io::BufWriter<File>,
     part_path: PathBuf,
     final_path: PathBuf,
     hasher: Sha256,
@@ -202,7 +202,7 @@ impl FileTransferManager {
                     Ok(file) => {
                         let incoming_entry = ActiveIncomingTransfer {
                             header: header.clone(),
-                            file,
+                            file: tokio::io::BufWriter::with_capacity(128 * 1024, file),
                             part_path,
                             final_path,
                             hasher: Sha256::new(),
@@ -438,7 +438,8 @@ impl FileTransferManager {
         info!("Peer accepted file transfer. Streaming chunks...");
 
         // Stream chunks
-        let mut file = File::open(file_path).await?;
+        let file = File::open(file_path).await?;
+        let mut file = tokio::io::BufReader::with_capacity(128 * 1024, file);
         let mut chunk_index: u64 = 0;
         let mut offset: u64 = 0;
 

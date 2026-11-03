@@ -155,10 +155,18 @@ class AndroidClipboardManager(
     }
 
     companion object {
+        private val HEX_CHARS = "0123456789abcdef".toCharArray()
+
         fun hashBytes(bytes: ByteArray): String {
             val md = MessageDigest.getInstance("SHA-256")
             val digest = md.digest(bytes)
-            return digest.joinToString("") { "%02x".format(it) }
+            val chars = CharArray(digest.size * 2)
+            for (i in digest.indices) {
+                val v = digest[i].toInt() and 0xFF
+                chars[i * 2] = HEX_CHARS[v ushr 4]
+                chars[i * 2 + 1] = HEX_CHARS[v and 0x0F]
+            }
+            return String(chars)
         }
     }
 }

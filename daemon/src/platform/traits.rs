@@ -1,4 +1,4 @@
-use std::collections::VecDeque;
+use std::collections::{HashSet, VecDeque};
 use std::time::{SystemTime, UNIX_EPOCH};
 use async_trait::async_trait;
 use sha2::{Digest, Sha256};
@@ -21,6 +21,7 @@ pub fn now_ms() -> u64 {
 pub struct DedupCache {
     capacity: usize,
     entries: VecDeque<(String, u64)>, // (hash, timestamp_ms)
+    set: HashSet<String>,
 }
 
 impl DedupCache {
@@ -28,20 +29,24 @@ impl DedupCache {
         Self {
             capacity,
             entries: VecDeque::with_capacity(capacity),
+            set: HashSet::with_capacity(capacity),
         }
     }
 
     pub fn contains(&self, hash: &str) -> bool {
-        self.entries.iter().any(|(h, _)| h == hash)
+        self.set.contains(hash)
     }
 
     pub fn insert(&mut self, hash: String, ts: u64) {
-        if self.contains(&hash) {
+        if self.set.contains(&hash) {
             return;
         }
         if self.entries.len() >= self.capacity {
-            self.entries.pop_front();
+            if let Some((old_hash, _)) = self.entries.pop_front() {
+                self.set.remove(&old_hash);
+            }
         }
+        self.set.insert(hash.clone());
         self.entries.push_back((hash, ts));
     }
 }

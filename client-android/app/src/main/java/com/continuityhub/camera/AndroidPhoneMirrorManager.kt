@@ -41,6 +41,16 @@ class AndroidPhoneMirrorManager(
     private var lastFrameTimeMs = 0L
     private val minFrameIntervalMs = 33L // Cap at ~30 FPS for smooth, efficient streaming
 
+    // Reusable buffers to eliminate garbage collector churn (0 MB/s heap allocations during streaming)
+    private var reusableRawBitmap: Bitmap? = null
+    private var reusableCroppedBitmap: Bitmap? = null
+    private var reusableCanvas: android.graphics.Canvas? = null
+    private val reusableBaos = FastByteArrayOutputStream(256 * 1024)
+
+    private class FastByteArrayOutputStream(capacity: Int) : ByteArrayOutputStream(capacity) {
+        fun toByteString(): ByteString = ByteString.copyFrom(buf, 0, count)
+    }
+
     fun startMirror(projection: MediaProjection, targetWidth: Int = 720, targetHeight: Int = 1600) {
         if (isMirroring.get()) {
             Log.w(tag, "Phone screen mirroring is already running")
@@ -110,34 +120,39 @@ class AndroidPhoneMirrorManager(
             val rowStride = planes[0].rowStride
             val rowPadding = rowStride - pixelStride * width
 
-            val rawBitmap = Bitmap.createBitmap(
-                width + rowPadding / pixelStride,
-                height,
-                Bitmap.Config.ARGB_8888
-            )
+            val rawWidth = width + rowPadding / pixelStride
+            var rawBitmap = reusableRawBitmap
+            if (rawBitmap == null || rawBitmap.width != rawWidth || rawBitmap.height != height) {
+                rawBitmap?.recycle()
+                rawBitmap = Bitmap.createBitmap(rawWidth, height, Bitmap.Config.ARGB_8888)
+                reusableRawBitmap = rawBitmap
+            }
+            buffer.rewind()
             rawBitmap.copyPixelsFromBuffer(buffer)
 
             val finalBitmap = if (rowPadding == 0) {
                 rawBitmap
             } else {
-                Bitmap.createBitmap(rawBitmap, 0, 0, width, height)
+                var cropped = reusableCroppedBitmap
+                if (cropped == null || cropped.width != width || cropped.height != height) {
+                    cropped?.recycle()
+                    cropped = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+                    reusableCroppedBitmap = cropped
+                    reusableCanvas = android.graphics.Canvas(cropped)
+                }
+                reusableCanvas?.drawBitmap(rawBitmap, 0f, 0f, null)
+                cropped
             }
 
-            val baos = ByteArrayOutputStream()
-            finalBitmap.compress(Bitmap.CompressFormat.JPEG, 70, baos)
-            val jpegBytes = baos.toByteArray()
-
-            if (finalBitmap != rawBitmap) {
-                rawBitmap.recycle()
-            }
-            finalBitmap.recycle()
+            reusableBaos.reset()
+            finalBitmap.compress(Bitmap.CompressFormat.JPEG, 65, reusableBaos)
 
             val frame = CameraFrame.newBuilder()
                 .setFrameIndex(frameCounter.incrementAndGet())
                 .setTimestampUs(System.currentTimeMillis() * 1000L)
                 .setWidth(width)
                 .setHeight(height)
-                .setFrameData(ByteString.copyFrom(jpegBytes))
+                .setFrameData(reusableBaos.toByteString())
                 .setIsKeyframe(true)
                 .setIsPhoneScreen(true)
                 .build()
@@ -155,6 +170,12 @@ class AndroidPhoneMirrorManager(
 
         _isMirroringState.value = false
         try {
+            reusableRawBitmap?.recycle()
+            reusableRawBitmap = null
+            reusableCroppedBitmap?.recycle()
+            reusableCroppedBitmap = null
+            reusableCanvas = null
+
             virtualDisplay?.release()
             virtualDisplay = null
 

@@ -206,11 +206,34 @@ impl InputManager {
 
         let ptr = state.pointer.as_ref().unwrap();
         let start_time = std::time::Instant::now();
+        let mut pending_cmd: Option<PointerCommand> = None;
 
-        while let Ok(cmd) = rx.recv() {
+        loop {
+            let cmd = if let Some(c) = pending_cmd.take() {
+                c
+            } else {
+                match rx.recv() {
+                    Ok(c) => c,
+                    Err(_) => break,
+                }
+            };
+
             let time = start_time.elapsed().as_millis() as u32;
             match cmd {
-                PointerCommand::Move { dx, dy } => {
+                PointerCommand::Move { mut dx, mut dy } => {
+                    // Coalesce rapid consecutive pointer motion packets to prevent Wayland IPC saturation
+                    while let Ok(next) = rx.try_recv() {
+                        match next {
+                            PointerCommand::Move { dx: next_dx, dy: next_dy } => {
+                                dx += next_dx;
+                                dy += next_dy;
+                            }
+                            other => {
+                                pending_cmd = Some(other);
+                                break;
+                            }
+                        }
+                    }
                     ptr.motion(time, dx, dy);
                     ptr.frame();
                     let _ = conn.flush();
@@ -232,7 +255,20 @@ impl InputManager {
                     ptr.frame();
                     let _ = conn.flush();
                 }
-                PointerCommand::Scroll { dx, dy } => {
+                PointerCommand::Scroll { mut dx, mut dy } => {
+                    // Coalesce rapid consecutive scroll packets
+                    while let Ok(next) = rx.try_recv() {
+                        match next {
+                            PointerCommand::Scroll { dx: next_dx, dy: next_dy } => {
+                                dx += next_dx;
+                                dy += next_dy;
+                            }
+                            other => {
+                                pending_cmd = Some(other);
+                                break;
+                            }
+                        }
+                    }
                     if dy.abs() > 0.001 {
                         ptr.axis(time, Axis::VerticalScroll, dy);
                     }

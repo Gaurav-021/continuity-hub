@@ -27,11 +27,20 @@ where
     }
 
     pub async fn send_packet(&mut self, packet: &Packet) -> Result<(), Error> {
+        self.feed_packet(packet).await?;
+        self.flush().await
+    }
+
+    pub async fn feed_packet(&mut self, packet: &Packet) -> Result<(), Error> {
         let mut bytes = BytesMut::with_capacity(packet.encoded_len());
         packet.encode(&mut bytes).map_err(|e| {
             Error::new(ErrorKind::InvalidData, format!("Protobuf encode error: {}", e))
         })?;
-        self.inner.send(bytes.freeze()).await
+        self.inner.feed(bytes.freeze()).await
+    }
+
+    pub async fn flush(&mut self) -> Result<(), Error> {
+        SinkExt::<bytes::Bytes>::flush(&mut self.inner).await
     }
 
     pub async fn next_packet(&mut self) -> Option<Result<Packet, Error>> {

@@ -303,6 +303,12 @@ class AndroidMediaManager(private val context: Context) {
 
         val stream = ByteArrayOutputStream()
         scaled.compress(Bitmap.CompressFormat.JPEG, 75, stream)
+        if (scaled != safeBitmap && !scaled.isRecycled) {
+            scaled.recycle()
+        }
+        if (safeBitmap != bitmap && !safeBitmap.isRecycled) {
+            safeBitmap.recycle()
+        }
         return stream.toByteArray()
     }
 }

@@ -188,9 +188,21 @@ where
     // Bidirectional transport loop
     loop {
         tokio::select! {
-            // Outbound packets from sync engine
+            // Outbound packets from sync engine (batch-drained to minimize TLS/TCP syscalls)
             Some(out_packet) = out_rx.recv() => {
-                if let Err(e) = framed.send_packet(&out_packet).await {
+                let mut err = framed.feed_packet(&out_packet).await;
+                if err.is_ok() {
+                    while let Ok(next_packet) = out_rx.try_recv() {
+                        if let Err(e) = framed.feed_packet(&next_packet).await {
+                            err = Err(e);
+                            break;
+                        }
+                    }
+                }
+                if err.is_ok() {
+                    err = framed.flush().await;
+                }
+                if let Err(e) = err {
                     error!("Error sending packet to peer {}: {}", peer_info.device_name, e);
                     break;
                 }

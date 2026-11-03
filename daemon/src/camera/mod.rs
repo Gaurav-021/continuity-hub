@@ -46,8 +46,8 @@ pub struct CameraManager {
     latest_frame: Arc<RwLock<Option<CameraFrame>>>,
     latest_phone_frame: Arc<RwLock<Option<CameraFrame>>>,
     active_peer_tx: Arc<RwLock<Option<mpsc::Sender<Packet>>>>,
-    frame_tx: broadcast::Sender<Vec<u8>>,
-    phone_frame_tx: broadcast::Sender<Vec<u8>>,
+    frame_tx: broadcast::Sender<bytes::Bytes>,
+    phone_frame_tx: broadcast::Sender<bytes::Bytes>,
     fps_counter: Arc<AtomicU32>,
     current_fps: Arc<AtomicU32>,
     phone_fps_counter: Arc<AtomicU32>,
@@ -68,8 +68,8 @@ impl CameraManager {
     }
 
     pub fn with_port(my_device_id: String, http_port: u16) -> Arc<Self> {
-        let (frame_tx, _) = broadcast::channel::<Vec<u8>>(32);
-        let (phone_frame_tx, _) = broadcast::channel::<Vec<u8>>(32);
+        let (frame_tx, _) = broadcast::channel::<bytes::Bytes>(32);
+        let (phone_frame_tx, _) = broadcast::channel::<bytes::Bytes>(32);
         let snapshot_path = std::env::temp_dir().join("continuity-camera-snapshot.jpg");
         let v4l2_writer = Arc::new(tokio::sync::Mutex::new(V4l2LoopbackWriter::new()));
 
@@ -1028,6 +1028,8 @@ impl CameraManager {
     }
 
     async fn handle_camera_frame(&self, frame: CameraFrame, _peer_name: &str) {
+        let frame_bytes = bytes::Bytes::from(frame.frame_data.clone());
+
         if frame.is_phone_screen {
             self.is_phone_mirror_streaming.store(true, Ordering::Relaxed);
             self.phone_fps_counter.fetch_add(1, Ordering::Relaxed);
@@ -1035,11 +1037,10 @@ impl CameraManager {
             *self.phone_width.write().await = frame.width;
             *self.phone_height.write().await = frame.height;
 
-            let frame_data = frame.frame_data.clone();
             *self.latest_phone_frame.write().await = Some(frame);
 
-            // Broadcast to Phone Mirror HTTP stream clients
-            let _ = self.phone_frame_tx.send(frame_data);
+            // Zero-copy broadcast to Phone Mirror HTTP stream clients
+            let _ = self.phone_frame_tx.send(frame_bytes);
             return;
         }
 
@@ -1052,8 +1053,8 @@ impl CameraManager {
         let frame_data = frame.frame_data.clone();
         *self.latest_frame.write().await = Some(frame);
 
-        // 1. Broadcast to HTTP MJPEG clients
-        let _ = self.frame_tx.send(frame_data.clone());
+        // 1. Zero-copy broadcast to HTTP MJPEG clients
+        let _ = self.frame_tx.send(frame_bytes);
 
         // 2. Feed to Linux V4L2 loopback device (/dev/video10) if available
         let mut v4l2 = self.v4l2_writer.lock().await;
@@ -1142,7 +1143,7 @@ impl CameraManager {
                         #[cfg(target_os = "linux")]
                         {
                             let output = tokio::process::Command::new("grim")
-                                .args(["-t", "jpeg", "-q", "50", "-"])
+                                .args(["-t", "jpeg", "-q", "40", "-"])
                                 .output()
                                 .await;
 
@@ -1172,8 +1173,14 @@ impl CameraManager {
 
                                         let guard = peer_tx_arc.read().await;
                                         if let Some(ref tx) = *guard {
-                                            if tx.send(packet).await.is_err() {
-                                                break;
+                                            match tx.try_send(packet) {
+                                                Ok(()) => {}
+                                                Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
+                                                    debug!("Dropping desktop screen frame due to transport backpressure");
+                                                }
+                                                Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
+                                                    break;
+                                                }
                                             }
                                         } else {
                                             break;
@@ -1210,7 +1217,7 @@ impl CameraManager {
                                 #[cfg(target_os = "linux")]
                                 {
                                     let output = tokio::process::Command::new("grim")
-                                        .args(["-o", "Sidecar", "-s", "1", "-t", "jpeg", "-q", "50", "-"])
+                                        .args(["-o", "Sidecar", "-s", "1", "-t", "jpeg", "-q", "40", "-"])
                                         .output()
                                         .await;
 
@@ -1240,8 +1247,14 @@ impl CameraManager {
 
                                                 let guard = peer_tx_arc.read().await;
                                                 if let Some(ref tx) = *guard {
-                                                    if tx.send(packet).await.is_err() {
-                                                        break;
+                                                    match tx.try_send(packet) {
+                                                        Ok(()) => {}
+                                                        Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
+                                                            debug!("Dropping sidecar screen frame due to transport backpressure");
+                                                        }
+                                                        Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
+                                                            break;
+                                                        }
                                                     }
                                                 } else {
                                                     break;

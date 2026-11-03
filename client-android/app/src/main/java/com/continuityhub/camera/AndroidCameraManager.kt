@@ -152,8 +152,8 @@ class AndroidCameraManager(private val context: Context) {
                     _uiState.value = _uiState.value.copy(fps = currentFps)
                 }
 
-                // Decode preview bitmap every 3 frames for local UI
-                if (currentIndex % 3L == 0L) {
+                // Decode preview bitmap for local UI only when an active subscriber/screen is listening
+                if (_uiState.subscriptionCount.value > 0 && currentIndex % 6L == 0L) {
                     try {
                         val opts = BitmapFactory.Options().apply { inSampleSize = 2 }
                         val bmp = BitmapFactory.decodeByteArray(bytes, 0, bytes.size, opts)

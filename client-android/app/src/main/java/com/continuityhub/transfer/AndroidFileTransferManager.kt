@@ -73,7 +73,7 @@ class AndroidFileTransferManager(
         val header: FileTransferHeader,
         val partFile: File,
         val finalFile: File,
-        val outputStream: FileOutputStream,
+        val outputStream: java.io.OutputStream,
         val digest: MessageDigest,
         var bytesReceived: Long,
         val senderName: String
@@ -135,7 +135,7 @@ class AndroidFileTransferManager(
                 val partFile = File(continuityDir, "${finalFile.name}.${UUID.randomUUID().toString().take(8)}.part")
 
                 try {
-                    val fos = FileOutputStream(partFile)
+                    val fos = java.io.BufferedOutputStream(FileOutputStream(partFile), 128 * 1024)
                     val digest = MessageDigest.getInstance("SHA-256")
                     val state = IncomingState(
                         header = header,
@@ -196,7 +196,7 @@ class AndroidFileTransferManager(
                         state.outputStream.flush()
                         state.outputStream.close()
 
-                        val calculatedHash = state.digest.digest().joinToString("") { "%02x".format(it) }
+                        val calculatedHash = state.digest.digest().toHex()
                         if (calculatedHash.equals(state.header.sha256Checksum, ignoreCase = true)) {
                             // Checksum matched! Atomic rename with copy fallback across mount boundaries
                             val renamed = if (state.partFile.renameTo(state.finalFile)) {
@@ -303,7 +303,7 @@ class AndroidFileTransferManager(
             }
         } ?: return Result.failure(IllegalStateException("Cannot open input stream for URI"))
 
-        val checksum = digest.digest().joinToString("") { "%02x".format(it) }
+        val checksum = digest.digest().toHex()
         val totalChunks = if (fileSize == 0L) 1L else (fileSize + CHUNK_SIZE - 1) / CHUNK_SIZE
 
         val header = FileTransferHeader.newBuilder()
@@ -470,4 +470,15 @@ class AndroidFileTransferManager(
 
         notificationManager.notify(file.hashCode(), notification)
     }
+}
+
+private fun ByteArray.toHex(): String {
+    val hexChars = "0123456789abcdef"
+    val result = StringBuilder(size * 2)
+    for (b in this) {
+        val i = b.toInt() and 0xFF
+        result.append(hexChars[i ushr 4])
+        result.append(hexChars[i and 0x0F])
+    }
+    return result.toString()
 }

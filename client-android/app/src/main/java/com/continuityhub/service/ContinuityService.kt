@@ -528,8 +528,8 @@ class ContinuityService : Service() {
         isInitiator: Boolean,
         suggestedPeer: DiscoveredPeer?
     ) {
-        val input = socket.getInputStream()
-        val output = socket.getOutputStream()
+        val input = java.io.BufferedInputStream(socket.getInputStream(), 64 * 1024)
+        val output = java.io.BufferedOutputStream(socket.getOutputStream(), 64 * 1024)
 
         val peerDeviceId: String
         val peerDeviceName: String
