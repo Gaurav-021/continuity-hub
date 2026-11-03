@@ -518,6 +518,10 @@ impl CameraManager {
                             }
                         }
 
+                        if (event_type == "touch" || event_type.is_empty()) && !nav_action.is_empty() {
+                            event_type = nav_action.clone();
+                        }
+
                         let mut dispatched = false;
                         match event_type.as_str() {
                             "tap" => {

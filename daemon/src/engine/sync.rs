@@ -189,6 +189,7 @@ impl SyncEngine {
         let active_peers = Arc::clone(&self.active_peers);
         let telephony_for_reg = Arc::clone(&self.telephony_mgr);
         let media_for_reg = Arc::clone(&self.media_mgr);
+        let camera_for_reg = Arc::clone(&self.camera_mgr);
         tokio::spawn(async move {
             while let Some(event) = peer_reg_rx.recv().await {
                 match event {
@@ -198,6 +199,8 @@ impl SyncEngine {
                             session.info.device_name, session.info.device_id
                         );
                         telephony_for_reg.set_peer_name(session.info.device_name.clone()).await;
+                        media_for_reg.set_peer_tx(session.tx.clone()).await;
+                        camera_for_reg.set_peer_tx(session.tx.clone()).await;
                         let mut peers = active_peers.write().await;
                         peers.insert(session.info.device_id, session.tx);
                     }

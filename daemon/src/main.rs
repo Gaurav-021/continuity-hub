@@ -157,21 +157,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
             #[cfg(target_os = "linux")]
             {
-                // Configure Hyprland floating window rules
+                // Configure Hyprland floating window rules via Lua eval (Omarchy / Hyprland 0.56+)
                 let _ = tokio::process::Command::new("hyprctl")
-                    .args(["keyword", "windowrulev2", "float,class:^(continuity-mirror)$"])
-                    .status()
-                    .await;
-                let _ = tokio::process::Command::new("hyprctl")
-                    .args(["keyword", "windowrulev2", "size 380 820,class:^(continuity-mirror)$"])
-                    .status()
-                    .await;
-                let _ = tokio::process::Command::new("hyprctl")
-                    .args(["keyword", "windowrulev2", "noborder,class:^(continuity-mirror)$"])
-                    .status()
-                    .await;
-                let _ = tokio::process::Command::new("hyprctl")
-                    .args(["keyword", "windowrulev2", "rounding 24,class:^(continuity-mirror)$"])
+                    .args([
+                        "eval",
+                        r#"o.window("continuity-mirror", { float = true, size = "380 820", rounding = 16, border_size = 0 })"#,
+                    ])
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null())
                     .status()
                     .await;
 
@@ -184,6 +177,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                             "--class=continuity-mirror",
                             "--name=continuity-mirror",
                             "--window-size=380,820",
+                            "--user-data-dir=/tmp/continuity-mirror-profile",
+                            "--no-first-run",
+                            "--no-default-browser-check",
                             "--ozone-platform=wayland",
                             "--enable-features=UseOzonePlatform",
                         ])

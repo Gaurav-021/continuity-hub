@@ -28,6 +28,7 @@ class AndroidPhoneMirrorManager(
     private val tag = "PhoneMirrorManager"
 
     private var mediaProjection: MediaProjection? = null
+    private var projectionCallback: MediaProjection.Callback? = null
     private var virtualDisplay: VirtualDisplay? = null
     private var imageReader: ImageReader? = null
     private var handlerThread: HandlerThread? = null
@@ -60,7 +61,18 @@ class AndroidPhoneMirrorManager(
         mediaProjection = projection
 
         handlerThread = HandlerThread("ContinuityScreenCapture").apply { start() }
-        backgroundHandler = Handler(handlerThread!!.looper)
+        val handler = Handler(handlerThread!!.looper)
+        backgroundHandler = handler
+
+        // Android 14+ (API 34/35) mandates registering a MediaProjection.Callback before creating VirtualDisplay
+        val callback = object : MediaProjection.Callback() {
+            override fun onStop() {
+                Log.i(tag, "MediaProjection stopped by system")
+                stopMirror()
+            }
+        }
+        projectionCallback = callback
+        projection.registerCallback(callback, handler)
 
         val windowManager = context.getSystemService(Context.WINDOW_SERVICE) as WindowManager
         val metrics = DisplayMetrics()
@@ -170,6 +182,15 @@ class AndroidPhoneMirrorManager(
 
         _isMirroringState.value = false
         try {
+            projectionCallback?.let { cb ->
+                try {
+                    mediaProjection?.unregisterCallback(cb)
+                } catch (e: Exception) {
+                    Log.d(tag, "Error unregistering projection callback: ${e.message}")
+                }
+            }
+            projectionCallback = null
+
             reusableRawBitmap?.recycle()
             reusableRawBitmap = null
             reusableCroppedBitmap?.recycle()

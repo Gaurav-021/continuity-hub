@@ -9,10 +9,7 @@ echo "📱 Launching Continuity Hub Phone Mirror window..."
 
 # 1. Apply Hyprland floating and borderless window rules if running on Hyprland
 if command -v hyprctl >/dev/null 2>&1; then
-    hyprctl keyword windowrulev2 "float,class:^(${WINDOW_CLASS})$" >/dev/null 2>&1 || true
-    hyprctl keyword windowrulev2 "size 380 820,class:^(${WINDOW_CLASS})$" >/dev/null 2>&1 || true
-    hyprctl keyword windowrulev2 "noborder,class:^(${WINDOW_CLASS})$" >/dev/null 2>&1 || true
-    hyprctl keyword windowrulev2 "rounding 24,class:^(${WINDOW_CLASS})$" >/dev/null 2>&1 || true
+    hyprctl eval 'o.window("'${WINDOW_CLASS}'", { float = true, size = "380 820", rounding = 16, border_size = 0 })' >/dev/null 2>&1 || true
 fi
 
 # 2. Launch Chromium/Chrome with native Wayland hardware acceleration and app mode
@@ -23,6 +20,9 @@ for browser in chromium google-chrome brave zen-browser; do
             "--class=${WINDOW_CLASS}" \
             "--name=${WINDOW_CLASS}" \
             "--window-size=380,820" \
+            "--user-data-dir=/tmp/continuity-mirror-profile" \
+            "--no-first-run" \
+            "--no-default-browser-check" \
             "--ozone-platform=wayland" \
             "--enable-features=UseOzonePlatform" \
             "$@"
