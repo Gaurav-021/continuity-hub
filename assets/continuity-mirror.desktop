@@ -1,0 +1,12 @@
+[Desktop Entry]
+Name=Phone Mirror
+GenericName=Wireless Phone Mirroring
+Comment=Direct wireless phone screen mirroring and remote control with drag-and-drop and keyboard navigation
+Exec=continuity-daemon --mirror
+Icon=continuity-hub
+Terminal=false
+Type=Application
+Categories=Utility;Network;AudioVideo;
+Keywords=android;phone;mirror;screen;cast;remote;continuity;
+StartupWMClass=continuity-mirror
+StartupNotify=true

@@ -60,6 +60,8 @@ pub struct CameraManager {
     phone_height: Arc<RwLock<u32>>,
     snapshot_path: PathBuf,
     v4l2_writer: Arc<tokio::sync::Mutex<V4l2LoopbackWriter>>,
+    file_transfer_mgr: Arc<RwLock<Option<Arc<crate::transfer::FileTransferManager>>>>,
+    is_phone_privacy_active: Arc<AtomicBool>,
 }
 
 impl CameraManager {
@@ -72,6 +74,8 @@ impl CameraManager {
         let (phone_frame_tx, _) = broadcast::channel::<bytes::Bytes>(32);
         let snapshot_path = std::env::temp_dir().join("continuity-camera-snapshot.jpg");
         let v4l2_writer = Arc::new(tokio::sync::Mutex::new(V4l2LoopbackWriter::new()));
+        let file_transfer_mgr = Arc::new(RwLock::new(None));
+        let is_phone_privacy_active = Arc::new(AtomicBool::new(false));
 
         let is_phone_mirror_streaming = Arc::new(AtomicBool::new(false));
         let phone_fps_counter = Arc::new(AtomicU32::new(0));
@@ -104,6 +108,8 @@ impl CameraManager {
             phone_height,
             snapshot_path,
             v4l2_writer,
+            file_transfer_mgr,
+            is_phone_privacy_active,
         });
 
         // Spawn FPS calculation ticker (every 1 second)
@@ -320,6 +326,144 @@ impl CameraManager {
                         );
                         let _ = stream.write_all(header.as_bytes()).await;
                         let _ = stream.write_all(body.as_bytes()).await;
+                    } else if path.starts_with("/phone/privacy") {
+                        let mut enabled = true;
+                        for part in query_string.split('&') {
+                            if let Some((k, v)) = part.split_once('=') {
+                                if k == "enabled" {
+                                    enabled = v == "true" || v == "1";
+                                }
+                            }
+                        }
+                        let req_body = req_str.split_once("\r\n\r\n")
+                            .map(|(_, b)| b)
+                            .or_else(|| req_str.split_once("\n\n").map(|(_, b)| b))
+                            .unwrap_or("");
+                        if let Ok(json) = serde_json::from_str::<serde_json::Value>(req_body.trim()) {
+                            if let Some(v) = json.get("enabled").and_then(|v| v.as_bool()) {
+                                enabled = v;
+                            }
+                        }
+
+                        let ok = manager.set_phone_privacy_mode(enabled).await;
+                        let json = serde_json::json!({ "ok": ok, "privacy_mode": enabled });
+                        let body = json.to_string();
+                        let header = format!(
+                            "HTTP/1.1 200 OK\r\n\
+                             Content-Type: application/json\r\n\
+                             Content-Length: {}\r\n\
+                             Access-Control-Allow-Origin: *\r\n\
+                             Connection: close\r\n\r\n",
+                            body.len()
+                        );
+                        let _ = stream.write_all(header.as_bytes()).await;
+                        let _ = stream.write_all(body.as_bytes()).await;
+                    } else if path.starts_with("/phone/drop") {
+                        // Extract filename from query parameter
+                        let mut filename = "dropped_file".to_string();
+                        for part in query_string.split('&') {
+                            if let Some((k, v)) = part.split_once('=') {
+                                if k == "filename" || k == "name" {
+                                    filename = url_decode(v);
+                                }
+                            }
+                        }
+
+                        let clean_filename = std::path::Path::new(&filename)
+                            .file_name()
+                            .and_then(|f| f.to_str())
+                            .unwrap_or("dropped_file")
+                            .to_string();
+
+                        let drop_dir = std::env::temp_dir().join("continuity-drops");
+                        let _ = tokio::fs::create_dir_all(&drop_dir).await;
+                        let dest_path = drop_dir.join(&clean_filename);
+
+                        let mut content_length = 0usize;
+                        for line in req_str.lines() {
+                            if let Some((k, v)) = line.split_once(':') {
+                                if k.trim().eq_ignore_ascii_case("content-length") {
+                                    content_length = v.trim().parse().unwrap_or(0);
+                                }
+                            }
+                        }
+
+                        let header_end_opt = buf[..n].windows(4).position(|w| w == b"\r\n\r\n").map(|p| p + 4)
+                            .or_else(|| buf[..n].windows(2).position(|w| w == b"\n\n").map(|p| p + 2));
+
+                        let mut dest_file = match tokio::fs::File::create(&dest_path).await {
+                            Ok(f) => f,
+                            Err(e) => {
+                                let err_json = serde_json::json!({ "ok": false, "error": format!("Cannot create file: {}", e) });
+                                let body = err_json.to_string();
+                                let header = format!("HTTP/1.1 500 Internal Server Error\r\nContent-Type: application/json\r\nContent-Length: {}\r\nAccess-Control-Allow-Origin: *\r\n\r\n", body.len());
+                                let _ = stream.write_all(header.as_bytes()).await;
+                                let _ = stream.write_all(body.as_bytes()).await;
+                                return;
+                            }
+                        };
+
+                        let mut bytes_written = 0usize;
+                        if let Some(hdr_end) = header_end_opt {
+                            let initial_chunk = &buf[hdr_end..n];
+                            if !initial_chunk.is_empty() {
+                                let _ = dest_file.write_all(initial_chunk).await;
+                                bytes_written += initial_chunk.len();
+                            }
+                        }
+
+                        let mut chunk = [0u8; 64 * 1024];
+                        while bytes_written < content_length {
+                            let remaining = content_length - bytes_written;
+                            let to_read = std::cmp::min(chunk.len(), remaining);
+                            match stream.read(&mut chunk[..to_read]).await {
+                                Ok(0) => break,
+                                Ok(bytes_read) => {
+                                    let _ = dest_file.write_all(&chunk[..bytes_read]).await;
+                                    bytes_written += bytes_read;
+                                }
+                                Err(_) => break,
+                            }
+                        }
+                        let _ = dest_file.flush().await;
+                        drop(dest_file);
+
+                        let active_tx_opt = manager.active_peer_tx.read().await.clone();
+                        let file_mgr_opt = manager.file_transfer_mgr.read().await.clone();
+                        let (transfer_queued, status_msg) = if let (Some(peer_tx), Some(fm)) = (active_tx_opt, file_mgr_opt) {
+                            let dest_path_clone = dest_path.clone();
+                            tokio::spawn(async move {
+                                match fm.send_file(&dest_path_clone, peer_tx).await {
+                                    Ok(id) => {
+                                        info!("Dropped file {:?} dispatched to peer phone (Transfer ID: {})", dest_path_clone, id);
+                                    }
+                                    Err(e) => {
+                                        warn!("Failed to dispatch dropped file {:?}: {}", dest_path_clone, e);
+                                    }
+                                }
+                            });
+                            (true, "Transfer queued to peer phone".to_string())
+                        } else {
+                            (false, "No active mobile peer connected to receive file".to_string())
+                        };
+
+                        let json = serde_json::json!({
+                            "ok": transfer_queued,
+                            "filename": clean_filename,
+                            "bytes_received": bytes_written,
+                            "status": status_msg,
+                        });
+                        let body = json.to_string();
+                        let header = format!(
+                            "HTTP/1.1 200 OK\r\n\
+                             Content-Type: application/json\r\n\
+                             Content-Length: {}\r\n\
+                             Access-Control-Allow-Origin: *\r\n\
+                             Connection: close\r\n\r\n",
+                            body.len()
+                        );
+                        let _ = stream.write_all(header.as_bytes()).await;
+                        let _ = stream.write_all(body.as_bytes()).await;
                     } else if path.starts_with("/phone/input") {
                         // Extract parameters from JSON body or query string
                         let req_body = req_str.split_once("\r\n\r\n")
@@ -419,6 +563,7 @@ impl CameraManager {
                                     "recents" => PhoneNavActionEnum::Recents,
                                     "notifications" => PhoneNavActionEnum::Notifications,
                                     "lock" => PhoneNavActionEnum::Lock,
+                                    "backspace" => PhoneNavActionEnum::Backspace,
                                     _ => PhoneNavActionEnum::Unknown,
                                 };
                                 if action_enum != PhoneNavActionEnum::Unknown {
@@ -472,27 +617,28 @@ impl CameraManager {
             flex-direction: column;
             align-items: center;
             justify-content: center;
-            padding: 20px;
+            padding: 12px;
+            overflow: hidden;
         }
         .header {
             display: flex;
             align-items: center;
             justify-content: space-between;
             width: 100%;
-            max-width: 400px;
-            margin-bottom: 14px;
+            max-width: 380px;
+            margin-bottom: 8px;
         }
         .brand {
             display: flex;
             align-items: center;
-            gap: 10px;
+            gap: 8px;
             font-weight: 700;
-            font-size: 18px;
+            font-size: 16px;
         }
         .badge {
             font-size: 11px;
             font-weight: 700;
-            padding: 3px 8px;
+            padding: 2px 8px;
             border-radius: 9999px;
             background: #22c55e22;
             color: #4ade80;
@@ -514,25 +660,27 @@ impl CameraManager {
         }
         .phone-wrapper {
             position: relative;
-            width: 360px;
-            height: 740px;
+            width: 100%;
+            max-width: 360px;
+            height: 700px;
+            max-height: calc(100vh - 120px);
             background: #000;
-            border-radius: 46px;
-            border: 10px solid var(--phone-bezel);
-            box-shadow: 0 25px 60px -15px rgba(0, 0, 0, 0.8), 0 0 0 1px #334155;
+            border-radius: 38px;
+            border: 8px solid var(--phone-bezel);
+            box-shadow: 0 20px 50px -10px rgba(0, 0, 0, 0.8), 0 0 0 1px #334155;
             overflow: hidden;
             display: flex;
             flex-direction: column;
         }
         .phone-notch {
             position: absolute;
-            top: 8px;
+            top: 6px;
             left: 50%;
             transform: translateX(-50%);
-            width: 80px;
-            height: 18px;
+            width: 70px;
+            height: 14px;
             background: #000;
-            border-radius: 12px;
+            border-radius: 10px;
             z-index: 10;
         }
         .screen-container {
@@ -558,26 +706,74 @@ impl CameraManager {
         .screen-overlay {
             position: absolute;
             inset: 0;
-            background: rgba(15, 23, 42, 0.85);
+            background: rgba(15, 23, 42, 0.88);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+            text-align: center;
+            gap: 14px;
+            z-index: 5;
+            transition: opacity 0.2s;
+        }
+        .screen-overlay.hidden { display: none; }
+        .drop-overlay {
+            position: absolute;
+            inset: 0;
+            background: rgba(11, 15, 25, 0.92);
+            border: 3px dashed var(--accent-color);
+            border-radius: 28px;
             display: flex;
             flex-direction: column;
             align-items: center;
             justify-content: center;
             padding: 24px;
             text-align: center;
-            gap: 16px;
-            z-index: 5;
-            transition: opacity 0.2s;
+            z-index: 20;
+            backdrop-filter: blur(8px);
+            animation: pulse-border 1.5s infinite;
         }
-        .screen-overlay.hidden { display: none; }
+        .drop-overlay.hidden { display: none; }
+        @keyframes pulse-border {
+            0%, 100% { border-color: #3b82f6; box-shadow: inset 0 0 30px rgba(59, 130, 246, 0.3); }
+            50% { border-color: #60a5fa; box-shadow: inset 0 0 50px rgba(96, 165, 250, 0.5); }
+        }
+        .toast {
+            position: absolute;
+            top: 24px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: #1e293b;
+            color: #f8fafc;
+            font-size: 12px;
+            font-weight: 600;
+            padding: 8px 16px;
+            border-radius: 9999px;
+            border: 1px solid #334155;
+            box-shadow: 0 10px 25px rgba(0,0,0,0.5);
+            z-index: 30;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            pointer-events: none;
+            transition: all 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+        }
+        .toast.hidden {
+            opacity: 0;
+            transform: translate(-50%, -15px);
+        }
+        .toast.success { border-color: #22c55e; color: #4ade80; }
+        .toast.error { border-color: #ef4444; color: #f87171; }
+        .toast.info { border-color: #3b82f6; color: #60a5fa; }
         .nav-bar {
-            height: 52px;
+            height: 48px;
             background: #0a0f1d;
             border-top: 1px solid #1e293b;
             display: flex;
             align-items: center;
             justify-content: space-around;
-            padding: 0 16px;
+            padding: 0 12px;
             z-index: 10;
         }
         .nav-btn {
@@ -585,13 +781,13 @@ impl CameraManager {
             border: none;
             color: var(--text-muted);
             cursor: pointer;
-            padding: 10px 14px;
-            border-radius: 10px;
+            padding: 8px 12px;
+            border-radius: 8px;
             transition: all 0.15s;
             display: flex;
             align-items: center;
             justify-content: center;
-            font-size: 16px;
+            font-size: 15px;
         }
         .nav-btn:hover {
             color: var(--text-color);
@@ -602,41 +798,12 @@ impl CameraManager {
         }
         .control-bar {
             width: 100%;
-            max-width: 400px;
-            margin-top: 14px;
+            max-width: 380px;
+            margin-top: 10px;
             display: flex;
             flex-direction: column;
-            gap: 10px;
-        }
-        .text-input-row {
-            display: flex;
             gap: 8px;
-            background: var(--card-bg);
-            border: 1px solid var(--border-color);
-            border-radius: 14px;
-            padding: 6px 10px;
         }
-        .text-input-row input {
-            flex: 1;
-            background: transparent;
-            border: none;
-            color: var(--text-color);
-            font-size: 14px;
-            outline: none;
-            padding: 4px;
-            user-select: text;
-        }
-        .text-input-row button {
-            background: var(--accent-color);
-            border: none;
-            color: white;
-            font-weight: 600;
-            font-size: 13px;
-            border-radius: 8px;
-            padding: 6px 14px;
-            cursor: pointer;
-        }
-        .text-input-row button:hover { background: var(--accent-hover); }
         .actions-row {
             display: flex;
             gap: 8px;
@@ -644,10 +811,10 @@ impl CameraManager {
         }
         .btn {
             flex: 1;
-            padding: 10px;
-            font-size: 13px;
+            padding: 8px 10px;
+            font-size: 12px;
             font-weight: 600;
-            border-radius: 12px;
+            border-radius: 10px;
             border: 1px solid var(--border-color);
             background: var(--card-bg);
             color: var(--text-color);
@@ -662,6 +829,17 @@ impl CameraManager {
             color: white;
         }
         .btn.primary:hover { background: var(--accent-hover); }
+        .btn.active {
+            background: #f59e0b22;
+            border-color: #f59e0b66;
+            color: #fbbf24;
+        }
+        .shortcuts-hint {
+            font-size: 11px;
+            color: var(--text-muted);
+            text-align: center;
+            margin-top: 2px;
+        }
     </style>
 </head>
 <body>
@@ -670,57 +848,77 @@ impl CameraManager {
             <span>📱 Phone Mirror</span>
             <span id="statusBadge" class="badge"><span class="badge-dot"></span> <span id="statusText">Ready</span></span>
         </div>
-        <div style="font-size: 12px; color: var(--text-muted);" id="fpsCounter">30 FPS</div>
+        <div style="font-size: 11px; color: var(--text-muted);" id="fpsCounter">30 FPS</div>
     </div>
 
     <div class="phone-wrapper">
         <div class="phone-notch"></div>
         <div class="screen-container" id="screenContainer">
-            <div id="overlay" class="screen-overlay">
-                <div style="font-size: 40px;">📱</div>
-                <div style="font-weight: 600; font-size: 16px;">Wireless Phone Mirroring</div>
-                <div style="font-size: 13px; color: var(--text-muted); max-width: 260px;">
-                    Control your phone with your laptop mouse, keyboard, and gestures without scrcpy or cables.
+            <div id="dropOverlay" class="drop-overlay hidden">
+                <div style="font-size: 38px;">📲</div>
+                <div style="font-weight: 700; font-size: 16px; margin-top: 8px;">Drop File into Phone</div>
+                <div id="dropFileName" style="font-size: 12px; color: #94a3b8; margin-top: 4px;">
+                    Send Photos, APKs, Videos, and Files instantly
                 </div>
-                <button class="btn primary" id="btnStartOverlay" style="padding: 12px 24px; font-size: 14px;">
+            </div>
+            <div id="toast" class="toast hidden"></div>
+            <div id="overlay" class="screen-overlay">
+                <div style="font-size: 36px;">📱</div>
+                <div style="font-weight: 600; font-size: 15px;">Wireless Phone Mirroring</div>
+                <div style="font-size: 12px; color: var(--text-muted); max-width: 250px;">
+                    Native pure Wayland control. Drag files here or type directly to control your phone.
+                </div>
+                <button class="btn primary" id="btnStartOverlay" style="padding: 10px 20px; font-size: 13px;">
                     Start Mirroring
                 </button>
             </div>
             <img id="phoneImage" src="/phone/stream.mjpg" alt="Phone Screen" draggable="false" />
         </div>
         <div class="nav-bar">
-            <button class="nav-btn" id="btnBack" title="Back (Escape)">◀</button>
-            <button class="nav-btn" id="btnHome" title="Home">⚪</button>
-            <button class="nav-btn" id="btnRecents" title="Recents">◽</button>
+            <button class="nav-btn" id="btnBack" title="Back (Esc)">◀</button>
+            <button class="nav-btn" id="btnHome" title="Home (Super/Home)">⚪</button>
+            <button class="nav-btn" id="btnRecents" title="Recents (Alt+Tab)">◽</button>
             <button class="nav-btn" id="btnNotif" title="Notifications">🔔</button>
             <button class="nav-btn" id="btnLock" title="Lock Screen">🔒</button>
         </div>
     </div>
 
     <div class="control-bar">
-        <div class="text-input-row">
-            <input type="text" id="phoneTextInput" placeholder="Type text to phone (press Enter)..." autocomplete="off" />
-            <button id="btnSendText">Send</button>
-        </div>
         <div class="actions-row">
-            <button class="btn" id="btnToggleMirror">▶ Start Mirroring</button>
-            <button class="btn" id="btnRefreshStream">🔄 Reconnect</button>
+            <button class="btn primary" id="btnToggleMirror">▶ Start Mirroring</button>
+            <button class="btn" id="btnPrivacy">🔒 Privacy Screen: OFF</button>
+            <button class="btn" id="btnRefreshStream">🔄</button>
+        </div>
+        <div class="shortcuts-hint">
+            ⌨️ Esc=Back • Super=Home • Alt+Tab=Recents • Ctrl+V=Paste • Drop files to transfer
         </div>
     </div>
 
     <script>
         const phoneImg = document.getElementById('phoneImage');
         const overlay = document.getElementById('overlay');
+        const dropOverlay = document.getElementById('dropOverlay');
+        const toast = document.getElementById('toast');
         const statusBadge = document.getElementById('statusBadge');
         const statusText = document.getElementById('statusText');
         const fpsCounter = document.getElementById('fpsCounter');
         const btnToggleMirror = document.getElementById('btnToggleMirror');
         const btnStartOverlay = document.getElementById('btnStartOverlay');
+        const btnPrivacy = document.getElementById('btnPrivacy');
         const btnRefreshStream = document.getElementById('btnRefreshStream');
-        const textInput = document.getElementById('phoneTextInput');
-        const btnSendText = document.getElementById('btnSendText');
 
         let isMirroring = false;
+        let isPrivacyActive = false;
+        let toastTimer = null;
+
+        function showToast(msg, type = 'info') {
+            toast.textContent = msg;
+            toast.className = 'toast ' + type;
+            clearTimeout(toastTimer);
+            toastTimer = setTimeout(() => {
+                toast.className = 'toast hidden';
+            }, 3000);
+        }
 
         async function sendInput(params) {
             try {
@@ -741,7 +939,7 @@ impl CameraManager {
                 if (data.ok) {
                     isMirroring = true;
                     overlay.classList.add('hidden');
-                    btnToggleMirror.textContent = '⏹ Stop Mirroring';
+                    btnToggleMirror.textContent = '⏹ Stop';
                     statusText.textContent = 'Mirroring';
                     statusBadge.classList.remove('offline');
                     phoneImg.src = '/phone/stream.mjpg?t=' + Date.now();
@@ -758,13 +956,31 @@ impl CameraManager {
                 overlay.classList.remove('hidden');
                 btnToggleMirror.textContent = '▶ Start Mirroring';
                 statusText.textContent = 'Stopped';
+                if (isPrivacyActive) {
+                    isPrivacyActive = false;
+                    btnPrivacy.textContent = '🔒 Privacy Screen: OFF';
+                    btnPrivacy.classList.remove('active');
+                }
             } catch (e) {
                 console.error("Stop mirror error:", e);
             }
         }
 
+        async function togglePrivacy() {
+            isPrivacyActive = !isPrivacyActive;
+            btnPrivacy.textContent = isPrivacyActive ? '🔒 Privacy Screen: ON' : '🔒 Privacy Screen: OFF';
+            btnPrivacy.classList.toggle('active', isPrivacyActive);
+            showToast(isPrivacyActive ? 'Phone display dimmed (Privacy Screen active)' : 'Phone display restored', 'info');
+            try {
+                await fetch('/phone/privacy?enabled=' + isPrivacyActive, { method: 'POST' });
+            } catch (e) {
+                console.error("Privacy toggle error:", e);
+            }
+        }
+
         btnToggleMirror.onclick = () => isMirroring ? stopMirror() : startMirror();
         btnStartOverlay.onclick = startMirror;
+        btnPrivacy.onclick = togglePrivacy;
         btnRefreshStream.onclick = () => {
             phoneImg.src = '/phone/stream.mjpg?t=' + Date.now();
         };
@@ -775,21 +991,6 @@ impl CameraManager {
         document.getElementById('btnRecents').onclick = () => sendInput({ type: 'nav', action: 'recents' });
         document.getElementById('btnNotif').onclick = () => sendInput({ type: 'nav', action: 'notifications' });
         document.getElementById('btnLock').onclick = () => sendInput({ type: 'nav', action: 'lock' });
-
-        // Text Injection
-        function sendCurrentText() {
-            const val = textInput.value;
-            if (!val) return;
-            sendInput({ type: 'text', text: val, enter: true });
-            textInput.value = '';
-        }
-        btnSendText.onclick = sendCurrentText;
-        textInput.onkeydown = (e) => {
-            if (e.key === 'Enter') {
-                e.preventDefault();
-                sendCurrentText();
-            }
-        };
 
         // Touch & Mouse Gesture Dispatch
         let isPointerDown = false;
@@ -821,9 +1022,9 @@ impl CameraManager {
             const duration = Math.max(50, Date.now() - startTime);
 
             const distSq = (endX - startX) * (endX - startX) + (endY - startY) * (endY - startY);
-            if (distSq < 0.0004) { // Small movement threshold (~2%) -> Tap
+            if (distSq < 0.0004) {
                 sendInput({ type: 'tap', x: startX, y: startY });
-            } else { // Swipe
+            } else {
                 sendInput({
                     type: 'swipe',
                     x: startX,
@@ -847,11 +1048,103 @@ impl CameraManager {
             });
         }, { passive: false });
 
-        // Global hotkeys (Escape -> Back)
-        window.addEventListener('keydown', (e) => {
-            if (e.target.tagName === 'INPUT') return;
+        // Native Desktop Keyboard Navigation
+        window.addEventListener('keydown', async (e) => {
+            // 1. Esc -> Back
             if (e.key === 'Escape') {
+                e.preventDefault();
                 sendInput({ type: 'nav', action: 'back' });
+                return;
+            }
+
+            // 2. Super / Meta or Home -> Home
+            if (e.key === 'Meta' || e.key === 'Home') {
+                e.preventDefault();
+                sendInput({ type: 'nav', action: 'home' });
+                return;
+            }
+
+            // 3. Alt+Tab or F1/F2 or Tab -> Recent Apps
+            if ((e.altKey && e.key === 'Tab') || e.key === 'F1' || e.key === 'F2') {
+                e.preventDefault();
+                sendInput({ type: 'nav', action: 'recents' });
+                return;
+            }
+
+            // 4. Ctrl+V / Cmd+V -> Direct Clipboard Paste to focused phone field
+            if ((e.ctrlKey || e.metaKey) && (e.key === 'v' || e.key === 'V')) {
+                e.preventDefault();
+                try {
+                    const text = await navigator.clipboard.readText();
+                    if (text) {
+                        sendInput({ type: 'text', text: text, enter: false });
+                        showToast('Pasted to phone', 'info');
+                    }
+                } catch (_) {}
+                return;
+            }
+
+            // 5. Backspace -> Backspace
+            if (e.key === 'Backspace') {
+                e.preventDefault();
+                sendInput({ type: 'nav', action: 'backspace' });
+                return;
+            }
+
+            // 6. Enter -> Enter
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                sendInput({ type: 'text', text: '', enter: true });
+                return;
+            }
+
+            // 7. Direct Character Typing
+            if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
+                e.preventDefault();
+                sendInput({ type: 'text', text: e.key, enter: false });
+                return;
+            }
+        });
+
+        // Desktop Drag-and-Drop into Phone
+        ['dragenter', 'dragover'].forEach(name => {
+            window.addEventListener(name, (e) => {
+                e.preventDefault();
+                e.dataTransfer.dropEffect = 'copy';
+                dropOverlay.classList.remove('hidden');
+            });
+        });
+
+        ['dragleave', 'dragend'].forEach(name => {
+            window.addEventListener(name, (e) => {
+                if (e.relatedTarget === null || e.clientX === 0 || e.clientY === 0) {
+                    dropOverlay.classList.add('hidden');
+                }
+            });
+        });
+
+        window.addEventListener('drop', async (e) => {
+            e.preventDefault();
+            dropOverlay.classList.add('hidden');
+            const files = e.dataTransfer.files;
+            if (!files || files.length === 0) return;
+
+            for (const file of files) {
+                showToast(`Sending ${file.name} to phone...`, 'info');
+                try {
+                    const res = await fetch('/phone/drop?filename=' + encodeURIComponent(file.name), {
+                        method: 'POST',
+                        body: file
+                    });
+                    const data = await res.json();
+                    if (data.ok) {
+                        showToast(`✓ Sent ${file.name} to phone!`, 'success');
+                    } else {
+                        showToast(`Failed: ${data.transfer_id_or_err || 'Transfer error'}`, 'error');
+                    }
+                } catch (err) {
+                    showToast(`Upload failed: ${err.message}`, 'error');
+                }
             }
         });
 
@@ -862,7 +1155,7 @@ impl CameraManager {
                 const data = await res.json();
                 if (data.is_mirroring) {
                     overlay.classList.add('hidden');
-                    btnToggleMirror.textContent = '⏹ Stop Mirroring';
+                    btnToggleMirror.textContent = '⏹ Stop';
                     statusText.textContent = 'Live';
                     statusBadge.classList.remove('offline');
                     fpsCounter.textContent = `${data.fps} FPS (${data.width}x${data.height})`;
@@ -1292,6 +1585,11 @@ impl CameraManager {
             CameraAction::StopPhoneMirror => {
                 info!("Received StopPhoneMirror command");
                 self.is_phone_mirror_streaming.store(false, Ordering::Relaxed);
+                self.is_phone_privacy_active.store(false, Ordering::Relaxed);
+            }
+            CameraAction::SetPhonePrivacyMode => {
+                info!("Received SetPhonePrivacyMode command: {}", control.privacy_mode);
+                self.is_phone_privacy_active.store(control.privacy_mode, Ordering::Relaxed);
             }
             _ => {}
         }
@@ -1340,6 +1638,7 @@ impl CameraManager {
             rotation_degrees: self.current_rotation.load(Ordering::Relaxed),
             touch_x: 0.0,
             touch_y: 0.0,
+            privacy_mode: false,
         };
 
         let msg = CameraMessage {
@@ -1365,8 +1664,49 @@ impl CameraManager {
         }
     }
 
+    pub async fn set_file_transfer_manager(&self, mgr: Arc<crate::transfer::FileTransferManager>) {
+        *self.file_transfer_mgr.write().await = Some(mgr);
+    }
+
+    pub async fn set_phone_privacy_mode(&self, enabled: bool) -> bool {
+        info!("Setting Phone Privacy Mode to: {}", enabled);
+        self.is_phone_privacy_active.store(enabled, Ordering::Relaxed);
+        let cmd = CameraControlCommand {
+            action: CameraAction::SetPhonePrivacyMode as i32,
+            lens: Lens::Back as i32,
+            torch: false,
+            zoom_ratio: 1.0,
+            width: 0,
+            height: 0,
+            rotation_degrees: 0,
+            touch_x: 0.0,
+            touch_y: 0.0,
+            privacy_mode: enabled,
+        };
+        let msg = CameraMessage {
+            msg: Some(Msg::Control(cmd)),
+        };
+        let mut bytes = Vec::new();
+        if msg.encode(&mut bytes).is_err() {
+            return false;
+        }
+        let packet = Packet {
+            session_id: self.my_device_id.clone(),
+            sequence_number: 1,
+            channel: Channel::Camera as i32,
+            payload: bytes,
+        };
+        let guard = self.active_peer_tx.read().await;
+        if let Some(ref tx) = *guard {
+            tx.send(packet).await.is_ok()
+        } else {
+            false
+        }
+    }
+
     pub async fn start_phone_mirror(&self) -> bool {
         info!("Sending StartPhoneMirror command to Android peer...");
+        let privacy = self.is_phone_privacy_active.load(Ordering::Relaxed);
         let cmd = CameraControlCommand {
             action: CameraAction::StartPhoneMirror as i32,
             lens: Lens::Back as i32,
@@ -1377,6 +1717,7 @@ impl CameraManager {
             rotation_degrees: 0,
             touch_x: 0.0,
             touch_y: 0.0,
+            privacy_mode: privacy,
         };
         let msg = CameraMessage {
             msg: Some(Msg::Control(cmd)),
@@ -1412,6 +1753,7 @@ impl CameraManager {
             rotation_degrees: 0,
             touch_x: 0.0,
             touch_y: 0.0,
+            privacy_mode: false,
         };
         let msg = CameraMessage {
             msg: Some(Msg::Control(cmd)),

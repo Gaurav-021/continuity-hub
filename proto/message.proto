@@ -219,6 +219,7 @@ message PhoneNavAction {
         ACTION_RECENTS = 3;
         ACTION_NOTIFICATIONS = 4;
         ACTION_LOCK = 5;
+        ACTION_BACKSPACE = 6;
     }
     Action action = 1;
 }
@@ -423,6 +424,7 @@ message CameraControlCommand {
         ACTION_SIDECAR_CLICK = 13;
         ACTION_START_PHONE_MIRROR = 14;
         ACTION_STOP_PHONE_MIRROR = 15;
+        ACTION_SET_PHONE_PRIVACY_MODE = 16;
     }
     Action action = 1;
     CameraConfig.Lens lens = 2;
@@ -433,6 +435,7 @@ message CameraControlCommand {
     uint32 rotation_degrees = 7;
     float touch_x = 8;
     float touch_y = 9;
+    bool privacy_mode = 10;
 }
 
 message CameraFrame {

@@ -3,10 +3,12 @@ package com.continuityhub.input
 import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.GestureDescription
 import android.graphics.Path
+import android.graphics.PixelFormat
 import android.os.Build
 import android.os.Bundle
 import android.util.DisplayMetrics
 import android.util.Log
+import android.view.WindowManager
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import com.continuityhub.proto.PhoneNavAction
@@ -16,6 +18,7 @@ import com.continuityhub.proto.PhoneTouchEvent
 class ContinuityAccessibilityService : AccessibilityService() {
 
     private val tag = "ContinuityA11yService"
+    private var privacyOverlayView: android.view.View? = null
 
     companion object {
         var instance: ContinuityAccessibilityService? = null
@@ -34,6 +37,10 @@ class ContinuityAccessibilityService : AccessibilityService() {
         fun executeText(textAction: PhoneTextAction): Boolean {
             return instance?.handleTextAction(textAction) ?: false
         }
+
+        fun setPrivacyScreen(enabled: Boolean) {
+            instance?.setPrivacyScreen(enabled)
+        }
     }
 
     override fun onServiceConnected() {
@@ -50,6 +57,11 @@ class ContinuityAccessibilityService : AccessibilityService() {
 
     override fun onDestroy() {
         super.onDestroy()
+        privacyOverlayView?.let {
+            val wm = getSystemService(WINDOW_SERVICE) as? WindowManager
+            try { wm?.removeView(it) } catch (_: Exception) {}
+            privacyOverlayView = null
+        }
         instance = null
         Log.i(tag, "Continuity Accessibility Service destroyed")
     }
@@ -161,7 +173,107 @@ class ContinuityAccessibilityService : AccessibilityService() {
                     false
                 }
             }
+            PhoneNavAction.Action.ACTION_BACKSPACE -> {
+                val root = rootInActiveWindow
+                val focused = root?.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
+                if (focused != null && focused.isEditable) {
+                    val current = focused.text?.toString() ?: ""
+                    if (current.isNotEmpty()) {
+                        val newText = current.dropLast(1)
+                        val args = Bundle().apply {
+                            putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, newText)
+                        }
+                        focused.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
+                    } else {
+                        false
+                    }
+                } else {
+                    false
+                }
+            }
             else -> false
+        }
+    }
+
+    fun setPrivacyScreen(enabled: Boolean) {
+        val wm = getSystemService(WINDOW_SERVICE) as? WindowManager ?: return
+        android.os.Handler(android.os.Looper.getMainLooper()).post {
+            try {
+                if (enabled) {
+                    if (privacyOverlayView == null) {
+                        val layout = android.widget.LinearLayout(this).apply {
+                            orientation = android.widget.LinearLayout.VERTICAL
+                            gravity = android.view.Gravity.CENTER
+                            setBackgroundColor(android.graphics.Color.BLACK)
+                            setPadding(48, 48, 48, 48)
+
+                            val icon = android.widget.TextView(context).apply {
+                                text = "📱"
+                                textSize = 48f
+                                gravity = android.view.Gravity.CENTER
+                            }
+                            addView(icon)
+
+                            val title = android.widget.TextView(context).apply {
+                                text = "Phone in Use"
+                                textSize = 22f
+                                setTextColor(android.graphics.Color.WHITE)
+                                gravity = android.view.Gravity.CENTER
+                                setTypeface(null, android.graphics.Typeface.BOLD)
+                                setPadding(0, 24, 0, 12)
+                            }
+                            addView(title)
+
+                            val desc = android.widget.TextView(context).apply {
+                                text = "Mirrored to Continuity Hub\nScreen dimmed for privacy"
+                                textSize = 14f
+                                setTextColor(android.graphics.Color.LTGRAY)
+                                gravity = android.view.Gravity.CENTER
+                                setPadding(0, 0, 0, 48)
+                            }
+                            addView(desc)
+
+                            val hint = android.widget.TextView(context).apply {
+                                text = "Tap screen to resume local control"
+                                textSize = 12f
+                                setTextColor(android.graphics.Color.GRAY)
+                                gravity = android.view.Gravity.CENTER
+                            }
+                            addView(hint)
+
+                            setOnClickListener {
+                                setPrivacyScreen(false)
+                            }
+                        }
+
+                        val params = WindowManager.LayoutParams(
+                            WindowManager.LayoutParams.MATCH_PARENT,
+                            WindowManager.LayoutParams.MATCH_PARENT,
+                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP_MR1)
+                                WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY
+                            else
+                                WindowManager.LayoutParams.TYPE_PHONE,
+                            WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
+                            WindowManager.LayoutParams.FLAG_FULLSCREEN,
+                            PixelFormat.TRANSLUCENT
+                        ).apply {
+                            screenBrightness = 0.01f // Minimum backlight brightness
+                        }
+
+                        wm.addView(layout, params)
+                        privacyOverlayView = layout
+                        Log.i(tag, "Phone privacy screen overlay enabled (brightness dimmed)")
+                    }
+                } else {
+                    privacyOverlayView?.let { view ->
+                        wm.removeView(view)
+                        privacyOverlayView = null
+                        Log.i(tag, "Phone privacy screen overlay dismissed")
+                    }
+                }
+            } catch (e: Exception) {
+                Log.w(tag, "Failed to toggle privacy screen overlay: ${e.message}")
+            }
         }
     }
 

@@ -1,3 +1,4 @@
+use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::sync::mpsc;
@@ -217,4 +218,35 @@ async fn test_phone_mirror_endpoints_and_input() {
     // Verify packet was dispatched to peer receiver channel
     let packet = peer_rx.recv().await.expect("Must receive input packet");
     assert_eq!(packet.channel, Channel::Input as i32);
+
+    // 5. Test POST /phone/privacy endpoint
+    let mut stream4 = TcpStream::connect(format!("127.0.0.1:{}", port)).await.unwrap();
+    stream4.write_all(b"POST /phone/privacy?enabled=true HTTP/1.1\r\nHost: localhost\r\nContent-Length: 0\r\n\r\n").await.unwrap();
+    let n4 = stream4.read(&mut buf).await.unwrap();
+    let resp4 = String::from_utf8_lossy(&buf[..n4]);
+    assert!(resp4.contains("HTTP/1.1 200 OK"));
+    assert!(resp4.contains("\"privacy_mode\":true"));
+
+    // Verify privacy control packet was sent to peer
+    let privacy_packet = peer_rx.recv().await.expect("Must receive privacy packet");
+    assert_eq!(privacy_packet.channel, Channel::Camera as i32);
+
+    // 6. Test POST /phone/drop endpoint
+    let file_transfer_mgr = Arc::new(continuity_daemon::transfer::FileTransferManager::new(None, "desktop-test".to_string()));
+    camera_mgr.set_file_transfer_manager(file_transfer_mgr).await;
+
+    let mut stream5 = TcpStream::connect(format!("127.0.0.1:{}", port)).await.unwrap();
+    let file_payload = b"PK\x03\x04dummy APK file contents for continuity testing";
+    let drop_req = format!(
+        "POST /phone/drop?filename=test_app.apk HTTP/1.1\r\nHost: localhost\r\nContent-Length: {}\r\n\r\n",
+        file_payload.len()
+    );
+    stream5.write_all(drop_req.as_bytes()).await.unwrap();
+    stream5.write_all(file_payload).await.unwrap();
+
+    let n5 = stream5.read(&mut buf).await.unwrap();
+    let resp5 = String::from_utf8_lossy(&buf[..n5]);
+    assert!(resp5.contains("HTTP/1.1 200 OK"));
+    assert!(resp5.contains("test_app.apk"));
+    assert!(resp5.contains("\"ok\":true"));
 }

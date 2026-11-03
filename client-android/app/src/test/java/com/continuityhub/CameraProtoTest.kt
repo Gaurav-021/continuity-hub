@@ -124,6 +124,15 @@ class CameraProtoTest {
         val stopMsg = CameraMessage.newBuilder().setControl(stopCmd).build()
         val parsedStop = CameraMessage.parseFrom(stopMsg.toByteArray())
         assertEquals(CameraControlCommand.Action.ACTION_STOP_PHONE_MIRROR, parsedStop.control.action)
+
+        val privacyCmd = CameraControlCommand.newBuilder()
+            .setAction(CameraControlCommand.Action.ACTION_SET_PHONE_PRIVACY_MODE)
+            .setPrivacyMode(true)
+            .build()
+        val privacyMsg = CameraMessage.newBuilder().setControl(privacyCmd).build()
+        val parsedPrivacy = CameraMessage.parseFrom(privacyMsg.toByteArray())
+        assertEquals(CameraControlCommand.Action.ACTION_SET_PHONE_PRIVACY_MODE, parsedPrivacy.control.action)
+        assertTrue(parsedPrivacy.control.privacyMode)
     }
 
     @Test

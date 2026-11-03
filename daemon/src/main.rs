@@ -156,9 +156,54 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         tokio::spawn(async move {
             tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
             #[cfg(target_os = "linux")]
-            let _ = tokio::process::Command::new("xdg-open")
-                .arg("http://127.0.0.1:52802/phone")
-                .spawn();
+            {
+                // Configure Hyprland floating window rules
+                let _ = tokio::process::Command::new("hyprctl")
+                    .args(["keyword", "windowrulev2", "float,class:^(continuity-mirror)$"])
+                    .status()
+                    .await;
+                let _ = tokio::process::Command::new("hyprctl")
+                    .args(["keyword", "windowrulev2", "size 380 820,class:^(continuity-mirror)$"])
+                    .status()
+                    .await;
+                let _ = tokio::process::Command::new("hyprctl")
+                    .args(["keyword", "windowrulev2", "noborder,class:^(continuity-mirror)$"])
+                    .status()
+                    .await;
+                let _ = tokio::process::Command::new("hyprctl")
+                    .args(["keyword", "windowrulev2", "rounding 24,class:^(continuity-mirror)$"])
+                    .status()
+                    .await;
+
+                // Try launching Chromium / Chrome with dedicated app mode and Wayland hardware acceleration
+                let mut spawned = false;
+                for browser in ["chromium", "google-chrome", "brave", "zen-browser"] {
+                    if let Ok(mut child) = tokio::process::Command::new(browser)
+                        .args([
+                            "--app=http://127.0.0.1:52802/phone",
+                            "--class=continuity-mirror",
+                            "--name=continuity-mirror",
+                            "--window-size=380,820",
+                            "--ozone-platform=wayland",
+                            "--enable-features=UseOzonePlatform",
+                        ])
+                        .spawn()
+                    {
+                        spawned = true;
+                        let _ = child.wait().await;
+                        break;
+                    }
+                }
+                if !spawned {
+                    let _ = tokio::process::Command::new("xdg-open")
+                        .arg("http://127.0.0.1:52802/phone")
+                        .spawn();
+                }
+            }
+            #[cfg(not(target_os = "linux"))]
+            {
+                let _ = open::that("http://127.0.0.1:52802/phone");
+            }
         });
     }
 

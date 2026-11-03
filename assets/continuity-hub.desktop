@@ -10,7 +10,11 @@ Categories=Utility;Network;HardwareSettings;
 Keywords=android;phone;continuity;clipboard;trackpad;webcam;telephony;sms;kdeconnect;
 StartupNotify=true
 
-Actions=SendFile;ViewStatus;StopDaemon;
+Actions=MirrorPhone;SendFile;ViewStatus;StopDaemon;
+
+[Desktop Action MirrorPhone]
+Name=Open Phone Mirror Window
+Exec=continuity-daemon --mirror
 
 [Desktop Action SendFile]
 Name=Send File to Phone...

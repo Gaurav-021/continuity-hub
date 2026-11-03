@@ -119,6 +119,9 @@ impl SyncEngine {
         // Link media manager to telephony manager for smart call ducking
         self.telephony_mgr.set_media_manager(Arc::clone(&self.media_mgr)).await;
 
+        // Link file transfer manager to camera manager for phone mirror drop target
+        self.camera_mgr.set_file_transfer_manager(Arc::clone(&self.file_transfer_mgr)).await;
+
         // Start MPRIS D-Bus player
         let _ = self.media_mgr.start_dbus_server().await;
 

@@ -708,10 +708,17 @@ class ContinuityService : Service() {
                                 when (ctrl.action) {
                                     CameraControlCommand.Action.ACTION_START_PHONE_MIRROR -> {
                                         phoneMirrorRequestedState.value = true
+                                        if (ctrl.privacyMode) {
+                                            com.continuityhub.input.ContinuityAccessibilityService.setPrivacyScreen(true)
+                                        }
                                     }
                                     CameraControlCommand.Action.ACTION_STOP_PHONE_MIRROR -> {
                                         phoneMirrorManager.stopMirror()
                                         phoneMirrorRequestedState.value = false
+                                        com.continuityhub.input.ContinuityAccessibilityService.setPrivacyScreen(false)
+                                    }
+                                    CameraControlCommand.Action.ACTION_SET_PHONE_PRIVACY_MODE -> {
+                                        com.continuityhub.input.ContinuityAccessibilityService.setPrivacyScreen(ctrl.privacyMode)
                                     }
                                     else -> cameraManager.executeRemoteControl(ctrl)
                                 }
@@ -1172,6 +1179,7 @@ class ContinuityService : Service() {
         phoneMirrorManager.stopMirror()
         isPhoneMirroringState.value = false
         phoneMirrorRequestedState.value = false
+        com.continuityhub.input.ContinuityAccessibilityService.setPrivacyScreen(false)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             val pendingIntent = PendingIntent.getActivity(
                 this,

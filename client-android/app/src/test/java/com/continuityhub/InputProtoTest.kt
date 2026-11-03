@@ -137,6 +137,13 @@ class InputProtoTest {
         val parsed = InputMessage.parseFrom(msg.toByteArray())
         assertTrue(parsed.hasPhoneNav())
         assertEquals(PhoneNavAction.Action.ACTION_BACK, parsed.phoneNav.action)
+
+        val navBackspace = PhoneNavAction.newBuilder()
+            .setAction(PhoneNavAction.Action.ACTION_BACKSPACE)
+            .build()
+        val msgBackspace = InputMessage.newBuilder().setPhoneNav(navBackspace).build()
+        val parsedBackspace = InputMessage.parseFrom(msgBackspace.toByteArray())
+        assertEquals(PhoneNavAction.Action.ACTION_BACKSPACE, parsedBackspace.phoneNav.action)
     }
 
     @Test
